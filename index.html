@@ -183,8 +183,8 @@
             if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
-                init(); // Start game immediately
-                if (gameMode === 'multiplayer') setupMultiplayer(); // Setup multiplayer after init
+                init();
+                if (gameMode === 'multiplayer') setupMultiplayer();
             } else {
                 alert('For multiplayer, generate or join with a code!');
             }
@@ -207,6 +207,9 @@
         let joystick, joystickRect, joystickCenterX, joystickCenterY, joystickActive = false, joystickTouchId = null;
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
         let peers = {}, myId, peerShips = {}, connectedPeers = 0;
+
+        // Mock signaling store (in-memory for demo)
+        const signalStore = {};
 
         function init() {
             scene = new THREE.Scene();
@@ -234,7 +237,165 @@
             document.addEventListener('pointerdown', onPointerDown);
             document.addEventListener('pointermove', onPointerMove);
             document.addEventListener('pointerup', onPointerUp);
-            animate(); // Start animation right away
+            animate();
+        }
+
+        function setupMultiplayer() {
+            myId = Math.random().toString(36).substr(2, 9);
+            const peer = new SimplePeer({ initiator: isHost, trickle: false });
+            peers[myId] = peer;
+
+            peer.on('signal', data => {
+                console.log(`Signal data for ${myId}:`, data);
+                if (isHost) {
+                    // Store host signal with gameCode
+                    signalStore[gameCode] = signalStore[gameCode] || {};
+                    signalStore[gameCode].hostSignal = data;
+                } else {
+                    // Joiner: Check for host signal and connect
+                    if (signalStore[gameCode] && signalStore[gameCode].hostSignal) {
+                        peer.signal(signalStore[gameCode].hostSignal);
+                    } else {
+                        console.log(`Waiting for host signal for ${gameCode}`);
+                        setTimeout(() => {
+                            if (signalStore[gameCode] && signalStore[gameCode].hostSignal) {
+                                peer.signal(signalStore[gameCode].hostSignal);
+                            }
+                        }, 1000); // Retry after 1s if host isn’t ready
+                    }
+                }
+            });
+
+            peer.on('connect', () => {
+                console.log('Connected to peer!');
+                connectedPeers++;
+                peer.send(JSON.stringify({ 
+                    type: 'position', 
+                    id: myId, 
+                    pos: ship.position, 
+                    rot: ship.rotation, 
+                    code: gameCode, 
+                    color: selectedColor 
+                }));
+            });
+
+            peer.on('data', data => {
+                const msg = JSON.parse(data);
+                if (msg.type === 'position') {
+                    if (!peerShips[msg.id]) {
+                        const peerShip = createPeerShip(msg.color, msg.code);
+                        peerShips[msg.id] = peerShip;
+                    }
+                    peerShips[msg.id].position.copy(msg.pos);
+                    peerShips[msg.id].rotation.copy(msg.rot);
+                } else if (msg.type === 'shoot') {
+                    createPeerBullet(msg.pos, msg.dir);
+                } else if (msg.type === 'hit') {
+                    ship.userData.health--;
+                    if (ship.userData.health <= 0) {
+                        ship.position.set(connectedPeers * 10, 100, connectedPeers * 10);
+                        ship.userData.health = ships[selectedShip].perk === 'High Durability' ? 2 : 1;
+                        setTimeout(() => ship.visible = true, 2000);
+                        ship.visible = false;
+                    }
+                }
+            });
+
+            peer.on('error', err => {
+                console.error('Peer error:', err);
+            });
+
+            // Joiner sends their signal back to host
+            if (!isHost) {
+                peer.on('signal', data => {
+                    if (signalStore[gameCode] && signalStore[gameCode].hostPeer) {
+                        signalStore[gameCode].hostPeer.signal(data);
+                    }
+                });
+            }
+
+            // Store host peer for joiner signals
+            if (isHost) {
+                signalStore[gameCode].hostPeer = peer;
+            }
+        }
+
+        function cleanupMultiplayer() {
+            Object.values(peers).forEach(peer => peer.destroy());
+            peers = {};
+            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
+            peerShips = {};
+            connectedPeers = 0;
+            if (gameCode && signalStore[gameCode]) delete signalStore[gameCode];
+        }
+
+        function createPeerShip(color, code) {
+            const shipGroup = new THREE.Group();
+            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            shipGroup.add(base);
+            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
+            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
+            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
+            dome.position.y = 0.8;
+            shipGroup.add(dome);
+            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
+            const ringMaterial = new THREE.MeshBasicMaterial({ color, emissive: color });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = -0.1;
+            shipGroup.add(ring);
+
+            if (code) {
+                const plateGeometry = new THREE.PlaneGeometry(2, 0.5);
+                const plateMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+                const plate = new THREE.Mesh(plateGeometry, plateMaterial);
+                plate.position.set(0, 0, 2.5);
+                plate.rotation.y = Math.PI;
+
+                const canvas = document.createElement('canvas');
+                canvas.width = 256;
+                canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, 256, 64);
+                ctx.fillStyle = '#00d4ff';
+                ctx.font = 'bold 40px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(code, 128, 45);
+                const texture = new THREE.CanvasTexture(canvas);
+                plate.material.map = texture;
+                plate.material.needsUpdate = true;
+                shipGroup.add(plate);
+            }
+
+            shipGroup.position.set(connectedPeers * 10, 100, connectedPeers * 10);
+            scene.add(shipGroup);
+            return shipGroup;
+        }
+
+        function createPeerBullet(pos, dir) {
+            const bulletGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+            bullet.position.copy(pos);
+            bullet.userData = { velocity: dir.clone().multiplyScalar(20), type: 'Standard', damage: 1 };
+            scene.add(bullet);
+            bullets.push(bullet);
+        }
+
+        function animate() {
+            if (isPaused) return requestAnimationFrame(animate);
+            requestAnimationFrame(animate);
+            updateCosmicEnvironment();
+            updateMovement();
+            updateCamera();
+            updateBullets();
+            if (gameMode === 'multiplayer' && peers[myId]) {
+                peers[myId].send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
+            }
+            renderer.render(scene, camera);
         }
 
         function createCosmicSky() {
@@ -375,118 +536,6 @@
             }
         }
 
-        function setupMultiplayer() {
-            myId = Math.random().toString(36).substr(2, 9);
-            const peer = new SimplePeer({ initiator: isHost, trickle: false });
-            peers[myId] = peer;
-
-            peer.on('signal', data => {
-                console.log(`Signal data for ${gameCode}:`, JSON.stringify(data));
-                if (!isHost) {
-                    const hostSignal = prompt(`Host, share your signal data for ${gameCode}. Joiner, paste it here:`);
-                    if (hostSignal) peer.signal(JSON.parse(hostSignal));
-                } else {
-                    alert(`Host signal for ${gameCode}: ${JSON.stringify(data)}\nShare this with joiners.`);
-                }
-            });
-
-            peer.on('connect', () => {
-                console.log('Connected to peer!');
-                connectedPeers++;
-                peer.send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
-            });
-
-            peer.on('data', data => {
-                const msg = JSON.parse(data);
-                if (msg.type === 'position') {
-                    if (!peerShips[msg.id]) {
-                        const peerShip = createPeerShip(msg.color, msg.code);
-                        peerShips[msg.id] = peerShip;
-                    }
-                    peerShips[msg.id].position.copy(msg.pos);
-                    peerShips[msg.id].rotation.copy(msg.rot);
-                } else if (msg.type === 'shoot') {
-                    createPeerBullet(msg.pos, msg.dir);
-                } else if (msg.type === 'hit') {
-                    ship.userData.health--;
-                    if (ship.userData.health <= 0) {
-                        ship.position.set(connectedPeers * 10, 100, connectedPeers * 10);
-                        ship.userData.health = ships[selectedShip].perk === 'High Durability' ? 2 : 1;
-                        setTimeout(() => ship.visible = true, 2000);
-                        ship.visible = false;
-                    }
-                }
-            });
-
-            peer.on('error', err => {
-                console.error('Peer error:', err);
-            });
-        }
-
-        function cleanupMultiplayer() {
-            Object.values(peers).forEach(peer => peer.destroy());
-            peers = {};
-            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
-            peerShips = {};
-            connectedPeers = 0;
-        }
-
-        function createPeerShip(color, code) {
-            const shipGroup = new THREE.Group();
-            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
-            const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
-            const base = new THREE.Mesh(baseGeometry, baseMaterial);
-            shipGroup.add(base);
-            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
-            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
-            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
-            dome.position.y = 0.8;
-            shipGroup.add(dome);
-            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
-            const ringMaterial = new THREE.MeshBasicMaterial({ color, emissive: color });
-            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-            ring.rotation.x = Math.PI / 2;
-            ring.position.y = -0.1;
-            shipGroup.add(ring);
-
-            if (code) {
-                const plateGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const plateMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-                const plate = new THREE.Mesh(plateGeometry, plateMaterial);
-                plate.position.set(0, 0, 2.5);
-                plate.rotation.y = Math.PI;
-
-                const canvas = document.createElement('canvas');
-                canvas.width = 256;
-                canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#000000';
-                ctx.fillRect(0, 0, 256, 64);
-                ctx.fillStyle = '#00d4ff';
-                ctx.font = 'bold 40px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(code, 128, 45);
-                const texture = new THREE.CanvasTexture(canvas);
-                plate.material.map = texture;
-                plate.material.needsUpdate = true;
-                shipGroup.add(plate);
-            }
-
-            shipGroup.position.set(connectedPeers * 10, 100, connectedPeers * 10);
-            scene.add(shipGroup);
-            return shipGroup;
-        }
-
-        function createPeerBullet(pos, dir) {
-            const bulletGeometry = new THREE.SphereGeometry(0.5, 8, 8);
-            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
-            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
-            bullet.position.copy(pos);
-            bullet.userData = { velocity: dir.clone().multiplyScalar(20), type: 'Standard', damage: 1 };
-            scene.add(bullet);
-            bullets.push(bullet);
-        }
-
         function togglePause(state) {
             isPaused = state;
             pauseMenu.style.display = state ? 'block' : 'none';
@@ -554,19 +603,6 @@
                     });
                 }
             });
-        }
-
-        function animate() {
-            if (isPaused) return requestAnimationFrame(animate);
-            requestAnimationFrame(animate);
-            updateCosmicEnvironment();
-            updateMovement();
-            updateCamera();
-            updateBullets();
-            if (gameMode === 'multiplayer' && peers[myId]) {
-                peers[myId].send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
-            }
-            renderer.render(scene, camera);
         }
 
         function fractalNoise(x, z, octaves = 8) {
