@@ -142,13 +142,25 @@
             optionMode.style.display = 'flex';
         });
 
-        soloMode.addEventListener('click', () => { gameMode = 'solo'; soloMode.style.background = '#00d4ff'; multiplayerMode.style.background = ''; gameCode = null; generatedCodeDisplay.innerText = ''; });
-        multiplayerMode.addEventListener('click', () => { gameMode = 'multiplayer'; multiplayerMode.style.background = '#00d4ff'; soloMode.style.background = ''; });
+        soloMode.addEventListener('click', () => { 
+            gameMode = 'solo'; 
+            soloMode.style.background = '#00d4ff'; 
+            multiplayerMode.style.background = ''; 
+            gameCode = null; 
+            generatedCodeDisplay.innerText = ''; 
+            joinGameInput.value = '';
+        });
+        multiplayerMode.addEventListener('click', () => { 
+            gameMode = 'multiplayer'; 
+            multiplayerMode.style.background = '#00d4ff'; 
+            soloMode.style.background = ''; 
+        });
 
         generateCodeButton.addEventListener('click', () => {
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
+                joinGameInput.value = ''; // Clear join input when generating
             }
         });
 
@@ -160,17 +172,16 @@
         });
 
         enterButton.addEventListener('click', () => {
-            if (selectedShip !== null && selectedColor !== null && (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode))) {
+            if (selectedShip === null || selectedColor === null) {
+                alert('Please select a ship and color!');
+                return;
+            }
+            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
-                try {
-                    init();
-                } catch (error) {
-                    console.error('Game init failed:', error);
-                    alert('Oops! Cosmic Horizon failed to launch. Check console.');
-                }
+                init();
             } else {
-                alert('Please select a ship, color, and (for multiplayer) a game code!');
+                alert('For multiplayer, generate or join with a code!');
             }
         });
 
@@ -180,6 +191,7 @@
             pauseMenu.style.display = 'none';
             canvas.style.display = 'none';
             optionMode.style.display = 'flex';
+            cleanupMultiplayer();
         });
 
         let camera, scene, renderer, ship, skyMaterial, fogMaterial, cosmicLights = [], npcShips = [], waterfalls = [], fogParticles, obstacles = [], bullets = [];
@@ -302,7 +314,7 @@
                 const plateGeometry = new THREE.PlaneGeometry(2, 0.5);
                 const plateMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
                 const plate = new THREE.Mesh(plateGeometry, plateMaterial);
-                plate.position.set(0, 0, 2.5); // Back of the ship
+                plate.position.set(0, 0, 2.5);
                 plate.rotation.y = Math.PI;
 
                 const canvas = document.createElement('canvas');
@@ -328,7 +340,8 @@
         }
 
         function createObstacles() {
-            for (let i = 0; i < 20; i++) {
+            const numObstacles = gameMode === 'solo' ? 20 : 10; // More in solo, fewer in multiplayer
+            for (let i = 0; i < numObstacles; i++) {
                 const obstacleGeometry = new THREE.BoxGeometry(10, 10, 10);
                 const obstacleMaterial = new THREE.MeshBasicMaterial({ color: 0xff5555 });
                 const obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
@@ -361,19 +374,23 @@
 
         function setupMultiplayer() {
             myId = Math.random().toString(36).substr(2, 9);
-            const peer = new SimplePeer({ initiator: !joinGameInput.value, trickle: false });
+            const isHost = !joinGameInput.value; // Host generates code, joiner uses it
+            const peer = new SimplePeer({ initiator: isHost, trickle: false });
             peers[myId] = peer;
 
             peer.on('signal', data => {
-                if (!joinGameInput.value) {
-                    console.log('Your signal data:', JSON.stringify(data));
-                    // Normally sent to a signaling server with gameCode
+                const signalData = JSON.stringify(data);
+                if (isHost) {
+                    console.log(`Host Signal for ${gameCode}:`, signalData);
+                    alert(`Share this with your friend:\n${signalData}`);
+                } else {
+                    console.log(`Joiner Signal for ${gameCode}:`, signalData);
                 }
             });
 
             peer.on('connect', () => {
                 console.log('Connected to peer!');
-                peer.send(JSON.stringify({ type: 'position', pos: ship.position, rot: ship.rotation, code: gameCode }));
+                peer.send(JSON.stringify({ type: 'position', pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
             });
 
             peer.on('data', data => {
@@ -398,15 +415,33 @@
                 }
             });
 
-            if (joinGameInput.value) {
+            peer.on('error', err => {
+                console.error('Peer error:', err);
+                alert('Multiplayer connection failed. Check console and try again.');
+            });
+
+            if (!isHost) {
                 const friendSignal = prompt(`Enter your friend’s signal data for code ${gameCode}:`);
-                if (friendSignal) peer.signal(JSON.parse(friendSignal));
-            } else {
-                setTimeout(() => {
-                    const friendSignal = prompt(`Share this code (${gameCode}) and enter your friend’s signal data:`);
-                    if (friendSignal) peer.signal(JSON.parse(friendSignal));
-                }, 1000);
+                if (friendSignal) {
+                    try {
+                        peer.signal(JSON.parse(friendSignal));
+                    } catch (e) {
+                        console.error('Invalid signal data:', e);
+                        alert('Invalid signal data. Check console.');
+                        quitButton.click();
+                    }
+                } else {
+                    alert('No signal provided. Returning to menu.');
+                    quitButton.click();
+                }
             }
+        }
+
+        function cleanupMultiplayer() {
+            Object.values(peers).forEach(peer => peer.destroy());
+            peers = {};
+            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
+            peerShips = {};
         }
 
         function createPeerShip(color, code) {
@@ -450,6 +485,7 @@
                 shipGroup.add(plate);
             }
 
+            shipGroup.position.set(10, 100, 10); // Slightly offset from host
             scene.add(shipGroup);
             return shipGroup;
         }
@@ -540,13 +576,12 @@
             updateMovement();
             updateCamera();
             updateBullets();
-            if (gameMode === 'multiplayer') {
-                Object.values(peers).forEach(peer => peer.send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, color: selectedColor, code: gameCode })));
+            if (gameMode === 'multiplayer' && peers[myId]) {
+                peers[myId].send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
             }
             renderer.render(scene, camera);
         }
 
-        // Remaining functions unchanged
         function fractalNoise(x, z, octaves = 8) {
             let total = 0, frequency = 0.015, amplitude = 1, maxValue = 0;
             for (let i = 0; i < octaves; i++) {
@@ -562,7 +597,9 @@
         function createWaterfall(x, y, z) {
             const particleGeometry = new THREE.BufferGeometry();
             const particleVertices = [];
-            for (let i = 0; i < 400; i++) particleVertices.push(x + (Math.random() - 0.5) * 12, y - Math.random() * 25, z + (Math.random() - 0.5) * 12);
+            for (let i = 0; i < 400; i++) {
+                particleVertices.push(x + (Math.random() - 0.5) * 12, y - Math.random() * 25, z + (Math.random() - 0.5) * 12);
+            }
             particleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particleVertices, 3));
             const particleMaterial = new THREE.PointsMaterial({ color: 0x88ccff, size: 0.6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, emissive: 0x88ccff, emissiveIntensity: 0.4 });
             const waterfall = new THREE.Points(particleGeometry, particleMaterial);
