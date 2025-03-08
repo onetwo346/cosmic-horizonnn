@@ -183,7 +183,8 @@
             if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
-                init();
+                init(); // Start game immediately
+                if (gameMode === 'multiplayer') setupMultiplayer(); // Setup multiplayer after init
             } else {
                 alert('For multiplayer, generate or join with a code!');
             }
@@ -228,13 +229,12 @@
             createObstacles();
             setupJoystick();
             setupControls();
-            if (gameMode === 'multiplayer') setupMultiplayer();
 
             window.addEventListener('resize', onWindowResize);
             document.addEventListener('pointerdown', onPointerDown);
             document.addEventListener('pointermove', onPointerMove);
             document.addEventListener('pointerup', onPointerUp);
-            animate();
+            animate(); // Start animation right away
         }
 
         function createCosmicSky() {
@@ -382,9 +382,7 @@
 
             peer.on('signal', data => {
                 console.log(`Signal data for ${gameCode}:`, JSON.stringify(data));
-                // Normally sent to a signaling server; here we assume peers will connect later
                 if (!isHost) {
-                    // Joiner prompts for host signal (temporary workaround)
                     const hostSignal = prompt(`Host, share your signal data for ${gameCode}. Joiner, paste it here:`);
                     if (hostSignal) peer.signal(JSON.parse(hostSignal));
                 } else {
@@ -395,7 +393,6 @@
             peer.on('connect', () => {
                 console.log('Connected to peer!');
                 connectedPeers++;
-                ship.position.set(connectedPeers * 10, 100, connectedPeers * 10); // Offset per player
                 peer.send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
             });
 
@@ -423,7 +420,6 @@
 
             peer.on('error', err => {
                 console.error('Peer error:', err);
-                // Don’t crash the game; just log it
             });
         }
 
