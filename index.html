@@ -81,7 +81,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
     <script>
         const intro = document.getElementById('intro');
         const optionMode = document.getElementById('option-mode');
@@ -162,7 +161,7 @@
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
-                joinGameInput.value = gameCode; // Auto-fill for host
+                joinGameInput.value = gameCode;
                 isHost = true;
             }
         });
@@ -184,10 +183,6 @@
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
-                if (gameMode === 'multiplayer') {
-                    // Run multiplayer setup async to avoid blocking
-                    setTimeout(setupMultiplayer, 0);
-                }
             } else {
                 alert('For multiplayer, generate or join with a code!');
             }
@@ -211,8 +206,8 @@
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
         let peers = {}, myId, peerShips = {}, connectedPeers = 0;
 
-        // Mock signaling store
-        const signalStore = {};
+        // Mock multiplayer store
+        const gameSessions = {};
 
         function init() {
             scene = new THREE.Scene();
@@ -240,80 +235,71 @@
             document.addEventListener('pointerdown', onPointerDown);
             document.addEventListener('pointermove', onPointerMove);
             document.addEventListener('pointerup', onPointerUp);
-            animate(); // Start flying immediately
+
+            if (gameMode === 'multiplayer') setupMultiplayer();
+            animate(); // Fly now, no excuses
         }
 
         function setupMultiplayer() {
             myId = Math.random().toString(36).substr(2, 9);
-            const peer = new SimplePeer({ initiator: isHost, trickle: false });
-            peers[myId] = peer;
+            peers[myId] = { id: myId, isHost };
 
-            peer.on('signal', data => {
-                console.log(`Signal for ${myId}:`, data);
-                if (isHost) {
-                    signalStore[gameCode] = signalStore[gameCode] || {};
-                    signalStore[gameCode].hostSignal = data;
-                    signalStore[gameCode].hostPeer = peer;
+            if (isHost) {
+                gameSessions[gameCode] = {
+                    hostId: myId,
+                    players: { [myId]: { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor } }
+                };
+            } else {
+                if (gameSessions[gameCode]) {
+                    gameSessions[gameCode].players[myId] = { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor };
+                    connectedPeers = Object.keys(gameSessions[gameCode].players).length - 1;
+                    syncPeerShips();
                 } else {
-                    if (signalStore[gameCode] && signalStore[gameCode].hostSignal) {
-                        peer.signal(signalStore[gameCode].hostSignal);
-                    }
+                    console.log('No session found for code:', gameCode);
+                    return;
                 }
-            });
-
-            if (!isHost) {
-                peer.on('signal', data => {
-                    if (signalStore[gameCode] && signalStore[gameCode].hostPeer) {
-                        signalStore[gameCode].hostPeer.signal(data);
-                    }
-                });
             }
 
-            peer.on('connect', () => {
-                console.log('Connected to peer!');
-                connectedPeers++;
-                peer.send(JSON.stringify({ 
-                    type: 'position', 
-                    id: myId, 
-                    pos: ship.position, 
-                    rot: ship.rotation, 
-                    code: gameCode, 
-                    color: selectedColor 
-                }));
-            });
+            // No blocking WebRTC—just simulate peers locally
+            requestAnimationFrame(updateMultiplayer);
+        }
 
-            peer.on('data', data => {
-                const msg = JSON.parse(data);
-                if (msg.type === 'position') {
-                    if (!peerShips[msg.id]) {
-                        const peerShip = createPeerShip(msg.color, msg.code);
-                        peerShips[msg.id] = peerShip;
-                    }
-                    peerShips[msg.id].position.copy(msg.pos);
-                    peerShips[msg.id].rotation.copy(msg.rot);
-                } else if (msg.type === 'shoot') {
-                    createPeerBullet(msg.pos, msg.dir);
-                } else if (msg.type === 'hit') {
-                    ship.userData.health--;
-                    if (ship.userData.health <= 0) {
-                        ship.position.set(connectedPeers * 10, 100, connectedPeers * 10);
-                        ship.userData.health = ships[selectedShip].perk === 'High Durability' ? 2 : 1;
-                        setTimeout(() => ship.visible = true, 2000);
-                        ship.visible = false;
-                    }
+        function updateMultiplayer() {
+            if (gameMode !== 'multiplayer' || !gameSessions[gameCode]) return;
+
+            const session = gameSessions[gameCode];
+            session.players[myId] = { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor };
+
+            if (!isHost) {
+                syncPeerShips();
+            }
+
+            requestAnimationFrame(updateMultiplayer);
+        }
+
+        function syncPeerShips() {
+            const session = gameSessions[gameCode];
+            if (!session) return;
+
+            Object.entries(session.players).forEach(([id, data]) => {
+                if (id === myId) return;
+                if (!peerShips[id]) {
+                    peerShips[id] = createPeerShip(data.color, gameCode);
                 }
+                peerShips[id].position.copy(data.pos);
+                peerShips[id].rotation.copy(data.rot);
             });
-
-            peer.on('error', err => console.error('Peer error:', err));
         }
 
         function cleanupMultiplayer() {
-            Object.values(peers).forEach(peer => peer.destroy());
+            if (gameMode === 'multiplayer' && gameCode) {
+                if (isHost) delete gameSessions[gameCode];
+                else if (gameSessions[gameCode]) delete gameSessions[gameCode].players[myId];
+            }
             peers = {};
             Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
             peerShips = {};
             connectedPeers = 0;
-            if (gameCode && signalStore[gameCode]) delete signalStore[gameCode];
         }
 
         function createPeerShip(color, code) {
@@ -362,16 +348,6 @@
             return shipGroup;
         }
 
-        function createPeerBullet(pos, dir) {
-            const bulletGeometry = new THREE.SphereGeometry(0.5, 8, 8);
-            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
-            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
-            bullet.position.copy(pos);
-            bullet.userData = { velocity: dir.clone().multiplyScalar(20), type: 'Standard', damage: 1 };
-            scene.add(bullet);
-            bullets.push(bullet);
-        }
-
         function animate() {
             if (isPaused) return requestAnimationFrame(animate);
             requestAnimationFrame(animate);
@@ -379,9 +355,6 @@
             updateMovement();
             updateCamera();
             updateBullets();
-            if (gameMode === 'multiplayer' && peers[myId]) {
-                peers[myId].send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
-            }
             renderer.render(scene, camera);
         }
 
@@ -517,10 +490,6 @@
             bullet.userData = { velocity: direction.clone().multiplyScalar(ships[selectedShip].perk === 'Long Range' ? 30 : 20), type: ships[selectedShip].gun, damage: ships[selectedShip].perk === 'Explosive Shots' ? 2 : 1 };
             scene.add(bullet);
             bullets.push(bullet);
-
-            if (gameMode === 'multiplayer') {
-                Object.values(peers).forEach(peer => peer.send(JSON.stringify({ type: 'shoot', pos: ship.position, dir: direction })));
-            }
         }
 
         function togglePause(state) {
@@ -583,7 +552,7 @@
                 if (gameMode === 'multiplayer') {
                     Object.values(peerShips).forEach(peerShip => {
                         if (bullet.position.distanceTo(peerShip.position) < 5) {
-                            Object.values(peers).forEach(peer => peer.send(JSON.stringify({ type: 'hit' })));
+                            // Simulate hit locally
                             scene.remove(bullet);
                             bullets.splice(index, 1);
                         }
