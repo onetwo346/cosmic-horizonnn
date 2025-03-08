@@ -100,7 +100,7 @@
         const resumeButton = document.getElementById('resume-button');
         const quitButton = document.getElementById('quit-button');
 
-        let selectedShip = null, selectedColor = null, gameMode = null, gameCode = null, isPaused = false;
+        let selectedShip = null, selectedColor = null, gameMode = null, gameCode = null, isPaused = false, isHost = false;
 
         const ships = [
             { name: 'Classic', perk: 'Balanced', color: 0xaaaaaa, gun: 'Standard', speed: 8.0 },
@@ -149,7 +149,9 @@
             gameCode = null; 
             generatedCodeDisplay.innerText = ''; 
             joinGameInput.value = '';
+            isHost = false;
         });
+
         multiplayerMode.addEventListener('click', () => { 
             gameMode = 'multiplayer'; 
             multiplayerMode.style.background = '#00d4ff'; 
@@ -161,6 +163,7 @@
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
                 joinGameInput.value = gameCode; // Auto-fill for host
+                isHost = true;
             }
         });
 
@@ -168,6 +171,7 @@
             if (gameMode === 'multiplayer' && joinGameInput.value) {
                 gameCode = joinGameInput.value.toUpperCase();
                 generatedCodeDisplay.innerText = `Joined: ${gameCode}`;
+                isHost = false;
             }
         });
 
@@ -204,7 +208,6 @@
         let peers = {}, myId, peerShips = {}, connectedPeers = 0;
 
         function init() {
-            if (typeof THREE === 'undefined') throw new Error('Three.js not loaded.');
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
             camera.position.set(0, 10, 15);
@@ -374,26 +377,25 @@
 
         function setupMultiplayer() {
             myId = Math.random().toString(36).substr(2, 9);
-            const peer = new SimplePeer({ initiator: generatedCodeDisplay.innerText.includes('Code'), trickle: false });
+            const peer = new SimplePeer({ initiator: isHost, trickle: false });
             peers[myId] = peer;
 
-            let signalQueue = [];
-            let isConnected = false;
-
             peer.on('signal', data => {
-                signalQueue.push(data);
-                if (isConnected) {
-                    broadcastSignal(data);
+                console.log(`Signal data for ${gameCode}:`, JSON.stringify(data));
+                // Normally sent to a signaling server; here we assume peers will connect later
+                if (!isHost) {
+                    // Joiner prompts for host signal (temporary workaround)
+                    const hostSignal = prompt(`Host, share your signal data for ${gameCode}. Joiner, paste it here:`);
+                    if (hostSignal) peer.signal(JSON.parse(hostSignal));
+                } else {
+                    alert(`Host signal for ${gameCode}: ${JSON.stringify(data)}\nShare this with joiners.`);
                 }
             });
 
             peer.on('connect', () => {
                 console.log('Connected to peer!');
-                isConnected = true;
                 connectedPeers++;
                 ship.position.set(connectedPeers * 10, 100, connectedPeers * 10); // Offset per player
-                signalQueue.forEach(signal => broadcastSignal(signal));
-                signalQueue = [];
                 peer.send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
             });
 
@@ -416,30 +418,12 @@
                         setTimeout(() => ship.visible = true, 2000);
                         ship.visible = false;
                     }
-                } else if (msg.type === 'signal') {
-                    peer.signal(msg.signal);
                 }
             });
 
             peer.on('error', err => {
                 console.error('Peer error:', err);
-                alert('Multiplayer connection issue. Check console.');
-            });
-
-            // Simulated matchmaking: Assume players with same code connect
-            setTimeout(() => {
-                if (!isConnected) {
-                    const fakePeerSignal = { type: 'offer', sdp: `fake-sdp-${gameCode}` }; // Simulated signal
-                    peer.signal(fakePeerSignal);
-                }
-            }, 1000);
-        }
-
-        function broadcastSignal(signal) {
-            Object.values(peers).forEach(peer => {
-                if (peer.connected) {
-                    peer.send(JSON.stringify({ type: 'signal', signal }));
-                }
+                // Don’t crash the game; just log it
             });
         }
 
@@ -492,6 +476,7 @@
                 shipGroup.add(plate);
             }
 
+            shipGroup.position.set(connectedPeers * 10, 100, connectedPeers * 10);
             scene.add(shipGroup);
             return shipGroup;
         }
