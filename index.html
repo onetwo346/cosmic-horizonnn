@@ -160,7 +160,7 @@
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
-                joinGameInput.value = ''; // Clear join input when generating
+                joinGameInput.value = gameCode; // Auto-fill for host
             }
         });
 
@@ -201,7 +201,7 @@
         let isUserInteracting = false, onPointerDownMouseX = 0, onPointerDownMouseY = 0, lon = 0, onPointerDownLon = 0, lat = 0, onPointerDownLat = 0, targetLon = 0, targetLat = 0, phi = 0, theta = 0;
         let joystick, joystickRect, joystickCenterX, joystickCenterY, joystickActive = false, joystickTouchId = null;
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
-        let peers = {}, myId, peerShips = {};
+        let peers = {}, myId, peerShips = {}, connectedPeers = 0;
 
         function init() {
             if (typeof THREE === 'undefined') throw new Error('Three.js not loaded.');
@@ -340,7 +340,7 @@
         }
 
         function createObstacles() {
-            const numObstacles = gameMode === 'solo' ? 20 : 10; // More in solo, fewer in multiplayer
+            const numObstacles = gameMode === 'solo' ? 20 : 10;
             for (let i = 0; i < numObstacles; i++) {
                 const obstacleGeometry = new THREE.BoxGeometry(10, 10, 10);
                 const obstacleMaterial = new THREE.MeshBasicMaterial({ color: 0xff5555 });
@@ -374,23 +374,27 @@
 
         function setupMultiplayer() {
             myId = Math.random().toString(36).substr(2, 9);
-            const isHost = !joinGameInput.value; // Host generates code, joiner uses it
-            const peer = new SimplePeer({ initiator: isHost, trickle: false });
+            const peer = new SimplePeer({ initiator: generatedCodeDisplay.innerText.includes('Code'), trickle: false });
             peers[myId] = peer;
 
+            let signalQueue = [];
+            let isConnected = false;
+
             peer.on('signal', data => {
-                const signalData = JSON.stringify(data);
-                if (isHost) {
-                    console.log(`Host Signal for ${gameCode}:`, signalData);
-                    alert(`Share this with your friend:\n${signalData}`);
-                } else {
-                    console.log(`Joiner Signal for ${gameCode}:`, signalData);
+                signalQueue.push(data);
+                if (isConnected) {
+                    broadcastSignal(data);
                 }
             });
 
             peer.on('connect', () => {
                 console.log('Connected to peer!');
-                peer.send(JSON.stringify({ type: 'position', pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
+                isConnected = true;
+                connectedPeers++;
+                ship.position.set(connectedPeers * 10, 100, connectedPeers * 10); // Offset per player
+                signalQueue.forEach(signal => broadcastSignal(signal));
+                signalQueue = [];
+                peer.send(JSON.stringify({ type: 'position', id: myId, pos: ship.position, rot: ship.rotation, code: gameCode, color: selectedColor }));
             });
 
             peer.on('data', data => {
@@ -407,34 +411,36 @@
                 } else if (msg.type === 'hit') {
                     ship.userData.health--;
                     if (ship.userData.health <= 0) {
-                        ship.position.set(0, 100, 0);
+                        ship.position.set(connectedPeers * 10, 100, connectedPeers * 10);
                         ship.userData.health = ships[selectedShip].perk === 'High Durability' ? 2 : 1;
                         setTimeout(() => ship.visible = true, 2000);
                         ship.visible = false;
                     }
+                } else if (msg.type === 'signal') {
+                    peer.signal(msg.signal);
                 }
             });
 
             peer.on('error', err => {
                 console.error('Peer error:', err);
-                alert('Multiplayer connection failed. Check console and try again.');
+                alert('Multiplayer connection issue. Check console.');
             });
 
-            if (!isHost) {
-                const friendSignal = prompt(`Enter your friend’s signal data for code ${gameCode}:`);
-                if (friendSignal) {
-                    try {
-                        peer.signal(JSON.parse(friendSignal));
-                    } catch (e) {
-                        console.error('Invalid signal data:', e);
-                        alert('Invalid signal data. Check console.');
-                        quitButton.click();
-                    }
-                } else {
-                    alert('No signal provided. Returning to menu.');
-                    quitButton.click();
+            // Simulated matchmaking: Assume players with same code connect
+            setTimeout(() => {
+                if (!isConnected) {
+                    const fakePeerSignal = { type: 'offer', sdp: `fake-sdp-${gameCode}` }; // Simulated signal
+                    peer.signal(fakePeerSignal);
                 }
-            }
+            }, 1000);
+        }
+
+        function broadcastSignal(signal) {
+            Object.values(peers).forEach(peer => {
+                if (peer.connected) {
+                    peer.send(JSON.stringify({ type: 'signal', signal }));
+                }
+            });
         }
 
         function cleanupMultiplayer() {
@@ -442,6 +448,7 @@
             peers = {};
             Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
             peerShips = {};
+            connectedPeers = 0;
         }
 
         function createPeerShip(color, code) {
@@ -485,7 +492,6 @@
                 shipGroup.add(plate);
             }
 
-            shipGroup.position.set(10, 100, 10); // Slightly offset from host
             scene.add(shipGroup);
             return shipGroup;
         }
@@ -560,7 +566,7 @@
                 if (gameMode === 'multiplayer') {
                     Object.values(peerShips).forEach(peerShip => {
                         if (bullet.position.distanceTo(peerShip.position) < 5) {
-                            peers[myId].send(JSON.stringify({ type: 'hit' }));
+                            Object.values(peers).forEach(peer => peer.send(JSON.stringify({ type: 'hit' })));
                             scene.remove(bullet);
                             bullets.splice(index, 1);
                         }
