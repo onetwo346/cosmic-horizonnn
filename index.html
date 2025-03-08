@@ -184,7 +184,10 @@
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
-                if (gameMode === 'multiplayer') setupMultiplayer();
+                if (gameMode === 'multiplayer') {
+                    // Run multiplayer setup async to avoid blocking
+                    setTimeout(setupMultiplayer, 0);
+                }
             } else {
                 alert('For multiplayer, generate or join with a code!');
             }
@@ -208,7 +211,7 @@
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
         let peers = {}, myId, peerShips = {}, connectedPeers = 0;
 
-        // Mock signaling store (in-memory for demo)
+        // Mock signaling store
         const signalStore = {};
 
         function init() {
@@ -237,7 +240,7 @@
             document.addEventListener('pointerdown', onPointerDown);
             document.addEventListener('pointermove', onPointerMove);
             document.addEventListener('pointerup', onPointerUp);
-            animate();
+            animate(); // Start flying immediately
         }
 
         function setupMultiplayer() {
@@ -246,25 +249,25 @@
             peers[myId] = peer;
 
             peer.on('signal', data => {
-                console.log(`Signal data for ${myId}:`, data);
+                console.log(`Signal for ${myId}:`, data);
                 if (isHost) {
-                    // Store host signal with gameCode
                     signalStore[gameCode] = signalStore[gameCode] || {};
                     signalStore[gameCode].hostSignal = data;
+                    signalStore[gameCode].hostPeer = peer;
                 } else {
-                    // Joiner: Check for host signal and connect
                     if (signalStore[gameCode] && signalStore[gameCode].hostSignal) {
                         peer.signal(signalStore[gameCode].hostSignal);
-                    } else {
-                        console.log(`Waiting for host signal for ${gameCode}`);
-                        setTimeout(() => {
-                            if (signalStore[gameCode] && signalStore[gameCode].hostSignal) {
-                                peer.signal(signalStore[gameCode].hostSignal);
-                            }
-                        }, 1000); // Retry after 1s if host isn’t ready
                     }
                 }
             });
+
+            if (!isHost) {
+                peer.on('signal', data => {
+                    if (signalStore[gameCode] && signalStore[gameCode].hostPeer) {
+                        signalStore[gameCode].hostPeer.signal(data);
+                    }
+                });
+            }
 
             peer.on('connect', () => {
                 console.log('Connected to peer!');
@@ -301,23 +304,7 @@
                 }
             });
 
-            peer.on('error', err => {
-                console.error('Peer error:', err);
-            });
-
-            // Joiner sends their signal back to host
-            if (!isHost) {
-                peer.on('signal', data => {
-                    if (signalStore[gameCode] && signalStore[gameCode].hostPeer) {
-                        signalStore[gameCode].hostPeer.signal(data);
-                    }
-                });
-            }
-
-            // Store host peer for joiner signals
-            if (isHost) {
-                signalStore[gameCode].hostPeer = peer;
-            }
+            peer.on('error', err => console.error('Peer error:', err));
         }
 
         function cleanupMultiplayer() {
