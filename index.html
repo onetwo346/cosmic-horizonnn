@@ -237,7 +237,7 @@
             document.addEventListener('pointerup', onPointerUp);
 
             if (gameMode === 'multiplayer') setupMultiplayer();
-            animate(); // Fly now, no excuses
+            animate();
         }
 
         function setupMultiplayer() {
@@ -249,10 +249,12 @@
                     hostId: myId,
                     players: { [myId]: { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor } }
                 };
+                console.log(`Hosting session ${gameCode} as ${myId}`);
             } else {
                 if (gameSessions[gameCode]) {
                     gameSessions[gameCode].players[myId] = { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor };
                     connectedPeers = Object.keys(gameSessions[gameCode].players).length - 1;
+                    console.log(`Joined session ${gameCode} as ${myId}, peers: ${connectedPeers}`);
                     syncPeerShips();
                 } else {
                     console.log('No session found for code:', gameCode);
@@ -260,7 +262,6 @@
                 }
             }
 
-            // No blocking WebRTC—just simulate peers locally
             requestAnimationFrame(updateMultiplayer);
         }
 
@@ -285,6 +286,7 @@
                 if (id === myId) return;
                 if (!peerShips[id]) {
                     peerShips[id] = createPeerShip(data.color, gameCode);
+                    console.log(`Added peer ship ${id} at ${data.pos.x}, ${data.pos.y}, ${data.pos.z}`);
                 }
                 peerShips[id].position.copy(data.pos);
                 peerShips[id].rotation.copy(data.rot);
@@ -343,7 +345,7 @@
                 shipGroup.add(plate);
             }
 
-            shipGroup.position.set(connectedPeers * 10, 100, connectedPeers * 10);
+            shipGroup.position.set(connectedPeers * 50, 100, connectedPeers * 50); // Updated offset
             scene.add(shipGroup);
             return shipGroup;
         }
@@ -552,7 +554,6 @@
                 if (gameMode === 'multiplayer') {
                     Object.values(peerShips).forEach(peerShip => {
                         if (bullet.position.distanceTo(peerShip.position) < 5) {
-                            // Simulate hit locally
                             scene.remove(bullet);
                             bullets.splice(index, 1);
                         }
