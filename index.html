@@ -161,7 +161,7 @@
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
                 isHost = true;
-                setupPeer(true);
+                setupPeer();
             }
         });
 
@@ -170,7 +170,7 @@
                 gameCode = joinGameInput.value.toUpperCase();
                 generatedCodeDisplay.innerText = `Joining: ${gameCode}`;
                 isHost = false;
-                setupPeer(false);
+                setupPeer();
             }
         });
 
@@ -179,12 +179,12 @@
                 alert('Please select a ship and color!');
                 return;
             }
-            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
+            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode && myId)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
             } else if (gameMode === 'multiplayer') {
-                alert('Please generate a code or join a game first!');
+                alert('Please generate a code or join a game and wait for connection!');
             }
         });
 
@@ -237,7 +237,8 @@
             animate();
         }
 
-        function setupPeer(isHost) {
+        function setupPeer() {
+            console.log(`Setting up PeerJS - Host: ${isHost}, Code: ${gameCode}`);
             peer = new Peer(isHost ? gameCode : null, { 
                 host: 'peerjs-server.herokuapp.com', 
                 secure: true, 
@@ -247,21 +248,23 @@
 
             peer.on('open', (id) => {
                 myId = id;
-                console.log(`${isHost ? 'Hosting' : 'Joined'} with ID: ${id}, Code: ${gameCode}`);
+                console.log(`Peer opened - ID: ${myId}, Role: ${isHost ? 'Host' : 'Joiner'}`);
                 if (!isHost) {
+                    console.log(`Joiner connecting to host with code: ${gameCode}`);
                     const conn = peer.connect(gameCode, { reliable: true });
-                    setupConnection(conn, true);
+                    setupConnection(conn);
                 }
             });
 
             peer.on('connection', (conn) => {
                 if (isHost) {
-                    setupConnection(conn, false);
+                    console.log(`Host received connection from ${conn.peer}`);
+                    setupConnection(conn);
                 }
             });
 
             peer.on('error', (err) => {
-                console.error('PeerJS Error:', err);
+                console.error(`PeerJS Error: ${err.type} - ${err.message}`);
                 if (err.type === 'peer-unavailable' && !isHost) {
                     alert('Host not found! Check the code and try again.');
                     cleanupMultiplayer();
@@ -271,38 +274,48 @@
             });
         }
 
-        function setupConnection(conn, isJoiner) {
+        function setupConnection(conn) {
+            console.log(`Setting up connection with ${conn.peer}`);
             connections.push(conn);
+
             conn.on('open', () => {
-                console.log(`Connection opened with ${conn.peer} (${isJoiner ? 'Joiner to Host' : 'Host to Joiner'})`);
+                console.log(`Connection OPEN with ${conn.peer}`);
                 const initialData = { 
-                    type: isJoiner ? 'join' : 'welcome', 
+                    type: 'init', 
                     id: myId, 
                     color: selectedColor, 
                     pos: ship ? ship.position.toArray() : [0, 100, 0], 
                     rot: ship ? ship.rotation.toArray() : [0, 0, 0] 
                 };
                 conn.send(initialData);
-                console.log(`Sent ${initialData.type} to ${conn.peer}:`, initialData);
+                console.log(`Sent init data to ${conn.peer}:`, initialData);
+                if (isHost && !peerShips[conn.peer]) {
+                    spawnPeerShip(conn.peer, initialData.color, initialData.pos, initialData.rot);
+                }
             });
 
             conn.on('data', (data) => {
-                console.log(`Data from ${conn.peer}:`, data);
+                console.log(`Received data from ${conn.peer}:`, data);
                 handlePeerData(data, conn.peer);
             });
 
             conn.on('close', () => {
-                console.log(`Connection closed with ${conn.peer}`);
+                console.log(`Connection CLOSED with ${conn.peer}`);
                 connections = connections.filter(c => c !== conn);
                 cleanupPeerShip(conn.peer);
             });
 
-            conn.on('error', (err) => console.error(`Connection error with ${conn.peer}: ${err}`));
+            conn.on('error', (err) => {
+                console.error(`Connection error with ${conn.peer}: ${err}`);
+            });
         }
 
         function setupMultiplayer() {
-            if (!peer) return;
-            console.log('Multiplayer sync started');
+            if (!peer || !myId) {
+                console.error('Multiplayer setup failed - Peer or myId not ready');
+                return;
+            }
+            console.log(`Multiplayer sync started for ${myId}`);
             setInterval(syncShipData, 33); // ~30 FPS sync
         }
 
@@ -313,16 +326,14 @@
                 id: myId, 
                 pos: ship.position.toArray(), 
                 rot: ship.rotation.toArray(), 
-                color: selectedColor, 
-                raceMode: isRaceMode, 
-                raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined 
+                color: selectedColor 
             };
             connections.forEach(conn => {
                 if (conn.open) {
                     conn.send(data);
-                    // console.log(`Sent update to ${conn.peer}:`, data); // Uncomment for verbose sync logging
+                    // console.log(`Sent update to ${conn.peer}:`, data); // Uncomment for verbose logging
                 } else {
-                    console.log(`Connection to ${conn.peer} closed, cleaning up`);
+                    console.log(`Connection to ${conn.peer} not open, removing`);
                     connections = connections.filter(c => c !== conn);
                 }
             });
@@ -334,28 +345,51 @@
                 return;
             }
 
-            if (data.type === 'join' || data.type === 'welcome') {
+            console.log(`Processing data from ${peerId}:`, data);
+
+            if (data.type === 'init') {
                 if (!peerShips[peerId]) {
-                    peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Spawned ship for ${peerId} at`, data.pos);
+                    spawnPeerShip(peerId, data.color, data.pos, data.rot);
+                } else {
+                    peerShips[peerId].position.fromArray(data.pos);
+                    peerShips[peerId].rotation.fromArray(data.rot);
                 }
-                peerShips[peerId].position.fromArray(data.pos);
-                peerShips[peerId].rotation.fromArray(data.rot);
             } else if (data.type === 'update') {
                 if (!peerShips[peerId]) {
-                    peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Late spawn for ${peerId} at`, data.pos);
-                }
-                peerShips[peerId].position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
-                peerShips[peerId].rotation.fromArray(data.rot);
-                if (data.raceMode && !isRaceMode && !isHost) {
-                    isRaceMode = true;
-                    if (!raceFinishLine) createRaceFinishLine();
-                    raceStartTime = performance.now() - (data.raceTime * 1000);
+                    console.log(`No ship for ${peerId}, spawning late`);
+                    spawnPeerShip(peerId, data.color, data.pos, data.rot);
+                } else {
+                    peerShips[peerId].position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
+                    peerShips[peerId].rotation.fromArray(data.rot);
                 }
             } else {
                 console.warn(`Unknown data type from ${peerId}:`, data);
             }
+        }
+
+        function spawnPeerShip(peerId, color, pos, rot) {
+            console.log(`Spawning ship for ${peerId} at`, pos);
+            const shipGroup = new THREE.Group();
+            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            shipGroup.add(base);
+            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
+            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
+            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
+            dome.position.y = 0.8;
+            shipGroup.add(dome);
+            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
+            const ringMaterial = new THREE.MeshBasicMaterial({ color, emissive: color });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = -0.1;
+            shipGroup.add(ring);
+            shipGroup.position.fromArray(pos);
+            shipGroup.rotation.fromArray(rot);
+            scene.add(shipGroup);
+            peerShips[peerId] = shipGroup;
+            console.log(`Ship spawned for ${peerId} - Total peers: ${Object.keys(peerShips).length}`);
         }
 
         function cleanupPeerShip(peerId) {
@@ -380,28 +414,7 @@
             raceFinishLine = null;
             isRaceMode = false;
             raceStatus.innerText = '';
-            console.log('Multiplayer cleaned up');
-        }
-
-        function createPeerShip(color) {
-            const shipGroup = new THREE.Group();
-            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
-            const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
-            const base = new THREE.Mesh(baseGeometry, baseMaterial);
-            shipGroup.add(base);
-            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
-            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
-            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
-            dome.position.y = 0.8;
-            shipGroup.add(dome);
-            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
-            const ringMaterial = new THREE.MeshBasicMaterial({ color, emissive: color });
-            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-            ring.rotation.x = Math.PI / 2;
-            ring.position.y = -0.1;
-            shipGroup.add(ring);
-            scene.add(shipGroup);
-            return shipGroup;
+            console.log('Multiplayer fully cleaned up');
         }
 
         function createRaceFinishLine() {
