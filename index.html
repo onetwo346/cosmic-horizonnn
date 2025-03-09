@@ -31,7 +31,7 @@
         #joystick { position: relative; top: 25px; left: 25px; width: 50px; height: 50px; background: radial-gradient(circle, #00d4ff, #1e90ff); border-radius: 50%; box-shadow: 0 0 10px #00d4ff; cursor: pointer; touch-action: none; }
         #instructions { position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 50, 0.7); padding: 10px 15px; border-radius: 5px; color: #fff; z-index: 10; max-width: 350px; text-shadow: 0 0 3px #00d4ff; }
         #pause-menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 50, 0.9); padding: 20px; border-radius: 10px; z-index: 100; display: none; text-align: center; }
-        #race-status { position: absolute; top: 20px; right: 20px; color: #00d4ff; font-size: 1.5rem; z-index: 10; }
+        #status { position: absolute; top: 10px; right: 10px; font-size: 1.2rem; color: #00d4ff; text-shadow: 0 0 5px #00d4ff; }
         @media (max-width: 768px) { #intro h1, #option-mode h1 { font-size: 3rem; } #intro p, #option-mode p { font-size: 1rem; } #start-button, .option-button, #enter-button, #generate-code, #join-game { font-size: 1.5rem; padding: 10px 20px; } #footer { font-size: 1rem; } #joystick-container { bottom: 20px; right: 20px; } #instructions { font-size: 14px; max-width: 250px; } }
     </style>
 </head>
@@ -63,7 +63,7 @@
     </div>
 
     <div id="instructions">
-        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down | R: Toggle Race
+        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down
     </div>
     <canvas id="canvas"></canvas>
     <div id="joystick-container">
@@ -74,7 +74,7 @@
         <div class="option-button" id="resume-button">Resume</div>
         <div class="option-button" id="quit-button">Quit</div>
     </div>
-    <div id="race-status"></div>
+    <div id="status"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -95,10 +95,10 @@
         const pauseMenu = document.getElementById('pause-menu');
         const resumeButton = document.getElementById('resume-button');
         const quitButton = document.getElementById('quit-button');
-        const raceStatus = document.getElementById('race-status');
+        const status = document.getElementById('status');
 
         let selectedShip = null, selectedColor = null, gameMode = null, gameCode = null, isPaused = false, isHost = false;
-        let peer = null, connections = [], myId = null, peerShips = {}, isRaceMode = false, raceStartTime = 0, raceFinishLine;
+        let peer, myId, connections = [], peerShips = {};
 
         const ships = [
             { name: 'Classic', perk: 'Balanced', color: 0xaaaaaa, gun: 'Standard', speed: 8.0 },
@@ -160,17 +160,18 @@
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
+                joinGameInput.value = gameCode;
                 isHost = true;
-                setupPeer(true);
+                setupMultiplayer();
             }
         });
 
         joinGameButton.addEventListener('click', () => {
             if (gameMode === 'multiplayer' && joinGameInput.value) {
                 gameCode = joinGameInput.value.toUpperCase();
-                generatedCodeDisplay.innerText = `Joining: ${gameCode}`;
+                generatedCodeDisplay.innerText = `Joined: ${gameCode}`;
                 isHost = false;
-                setupPeer(false);
+                setupMultiplayer();
             }
         });
 
@@ -179,12 +180,12 @@
                 alert('Please select a ship and color!');
                 return;
             }
-            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
+            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode && myId)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
             } else if (gameMode === 'multiplayer') {
-                alert('Please generate a code or join a game first!');
+                alert('Waiting for connection—generate or join with a code!');
             }
         });
 
@@ -200,10 +201,94 @@
         let camera, scene, renderer, ship, skyMaterial, fogMaterial, cosmicLights = [], npcShips = [], waterfalls = [], fogParticles, obstacles = [], bullets = [];
         let velocity = new THREE.Vector3();
         let maxSpeed = ships[0].speed, baseAccel = 2.0, boostAccel = 6.0, friction = 0.95, liftSpeed = 4.0, blastSpeed = 40, verticalSpeed = 4.0;
-        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, escape: false, r: false };
+        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, escape: false };
         let isUserInteracting = false, onPointerDownMouseX = 0, onPointerDownMouseY = 0, lon = 0, onPointerDownLon = 0, lat = 0, onPointerDownLat = 0, targetLon = 0, targetLat = 0, phi = 0, theta = 0;
         let joystick, joystickRect, joystickCenterX, joystickCenterY, joystickActive = false, joystickTouchId = null;
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
+
+        function setupMultiplayer() {
+            console.log(`Setting up Peer - Host: ${isHost}, Code: ${gameCode}`);
+            peer = new Peer(isHost ? gameCode : null, {
+                host: 'peerjs-server.herokuapp.com',
+                secure: true,
+                port: 443,
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+            });
+
+            peer.on('open', (id) => {
+                myId = id;
+                console.log(`Peer ready - ID: ${myId}, Role: ${isHost ? 'Host' : 'Joiner'}`);
+                if (!isHost) {
+                    const conn = peer.connect(gameCode);
+                    setupConnection(conn);
+                }
+                if (gameMode === 'multiplayer') enterButton.disabled = false;
+            });
+
+            peer.on('connection', (conn) => {
+                if (isHost) {
+                    console.log(`Host got connection from ${conn.peer}`);
+                    setupConnection(conn);
+                    spawnPeerShip(conn.peer); // Spawn joiner’s ship instantly
+                }
+            });
+
+            peer.on('error', (err) => {
+                console.error(`Peer error: ${err}`);
+                alert('Connection failed! Check code or try again.');
+                cleanupMultiplayer();
+            });
+        }
+
+        function setupConnection(conn) {
+            connections.push(conn);
+            conn.on('open', () => {
+                console.log(`Connection live with ${conn.peer}`);
+                const data = { 
+                    id: myId, 
+                    pos: ship ? ship.position.toArray() : [0, 100, 0], 
+                    rot: ship ? [ship.rotation.x, ship.rotation.y, ship.rotation.z] : [0, 0, 0], 
+                    color: selectedColor 
+                };
+                conn.send(data);
+            });
+
+            conn.on('data', (data) => {
+                console.log(`Data from ${conn.peer}:`, data);
+                if (!peerShips[conn.peer]) {
+                    spawnPeerShip(conn.peer, data.color, data.pos, data.rot);
+                } else {
+                    peerShips[conn.peer].position.fromArray(data.pos);
+                    peerShips[conn.peer].rotation.set(data.rot[0], data.rot[1], data.rot[2]);
+                }
+                status.innerText = `Players: ${Object.keys(peerShips).length + 1}`;
+            });
+
+            conn.on('close', () => {
+                console.log(`${conn.peer} disconnected`);
+                if (peerShips[conn.peer]) {
+                    scene.remove(peerShips[conn.peer]);
+                    delete peerShips[conn.peer];
+                }
+                connections = connections.filter(c => c !== conn);
+                status.innerText = `Players: ${Object.keys(peerShips).length + 1}`;
+            });
+        }
+
+        function cleanupMultiplayer() {
+            if (peer) peer.destroy();
+            peer = null;
+            myId = null;
+            connections.forEach(conn => conn.close());
+            connections = [];
+            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
+            peerShips = {};
+            gameCode = null;
+            generatedCodeDisplay.innerText = '';
+            joinGameInput.value = '';
+            status.innerText = '';
+            if (gameMode === 'multiplayer') enterButton.disabled = true;
+        }
 
         function init() {
             scene = new THREE.Scene();
@@ -224,7 +309,6 @@
             createSkyscraper();
             createNPCShips();
             createObstacles();
-            if (isHost && gameMode === 'multiplayer') createRaceFinishLine();
             setupJoystick();
             setupControls();
 
@@ -233,157 +317,12 @@
             document.addEventListener('pointermove', onPointerMove);
             document.addEventListener('pointerup', onPointerUp);
 
-            if (gameMode === 'multiplayer') setupMultiplayer();
             animate();
         }
 
-        function setupPeer(isHost) {
-            peer = new Peer(isHost ? gameCode : null, { 
-                host: 'peerjs-server.herokuapp.com', 
-                secure: true, 
-                port: 443, 
-                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'turn:relay.backupsrv.com', username: 'webrtc', credential: 'webrtc' }] }
-            });
-
-            peer.on('open', (id) => {
-                myId = id;
-                console.log(`${isHost ? 'Hosting' : 'Joined'} with ID: ${id}, Code: ${gameCode}`);
-                if (!isHost) {
-                    const conn = peer.connect(gameCode, { reliable: true });
-                    setupConnection(conn, true);
-                }
-            });
-
-            peer.on('connection', (conn) => {
-                if (isHost) {
-                    setupConnection(conn, false);
-                }
-            });
-
-            peer.on('error', (err) => {
-                console.error('PeerJS Error:', err);
-                if (err.type === 'peer-unavailable' && !isHost) {
-                    alert('Host not found! Check the code and try again.');
-                    cleanupMultiplayer();
-                    optionMode.style.display = 'flex';
-                    canvas.style.display = 'none';
-                }
-            });
-        }
-
-        function setupConnection(conn, isJoiner) {
-            connections.push(conn);
-            conn.on('open', () => {
-                console.log(`Connection opened with ${conn.peer} (${isJoiner ? 'Joiner to Host' : 'Host to Joiner'})`);
-                const initialData = { 
-                    type: isJoiner ? 'join' : 'welcome', 
-                    id: myId, 
-                    color: selectedColor, 
-                    pos: ship ? ship.position.toArray() : [0, 100, 0], 
-                    rot: ship ? ship.rotation.toArray() : [0, 0, 0] 
-                };
-                conn.send(initialData);
-                console.log(`Sent ${initialData.type} to ${conn.peer}:`, initialData);
-            });
-
-            conn.on('data', (data) => {
-                console.log(`Data from ${conn.peer}:`, data);
-                handlePeerData(data, conn.peer);
-            });
-
-            conn.on('close', () => {
-                console.log(`Connection closed with ${conn.peer}`);
-                connections = connections.filter(c => c !== conn);
-                cleanupPeerShip(conn.peer);
-            });
-
-            conn.on('error', (err) => console.error(`Connection error with ${conn.peer}: ${err}`));
-        }
-
-        function setupMultiplayer() {
-            if (!peer) return;
-            console.log('Multiplayer sync started');
-            setInterval(syncShipData, 33); // ~30 FPS sync
-        }
-
-        function syncShipData() {
-            if (!ship || isPaused || !myId) return;
-            const data = { 
-                type: 'update', 
-                id: myId, 
-                pos: ship.position.toArray(), 
-                rot: ship.rotation.toArray(), 
-                color: selectedColor, 
-                raceMode: isRaceMode, 
-                raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined 
-            };
-            connections.forEach(conn => {
-                if (conn.open) {
-                    conn.send(data);
-                    // console.log(`Sent update to ${conn.peer}:`, data); // Uncomment for verbose sync logging
-                } else {
-                    console.log(`Connection to ${conn.peer} closed, cleaning up`);
-                    connections = connections.filter(c => c !== conn);
-                }
-            });
-        }
-
-        function handlePeerData(data, peerId) {
-            if (!data || !peerId) {
-                console.error('Invalid data or peerId:', data, peerId);
-                return;
-            }
-
-            if (data.type === 'join' || data.type === 'welcome') {
-                if (!peerShips[peerId]) {
-                    peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Spawned ship for ${peerId} at`, data.pos);
-                }
-                peerShips[peerId].position.fromArray(data.pos);
-                peerShips[peerId].rotation.fromArray(data.rot);
-            } else if (data.type === 'update') {
-                if (!peerShips[peerId]) {
-                    peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Late spawn for ${peerId} at`, data.pos);
-                }
-                peerShips[peerId].position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
-                peerShips[peerId].rotation.fromArray(data.rot);
-                if (data.raceMode && !isRaceMode && !isHost) {
-                    isRaceMode = true;
-                    if (!raceFinishLine) createRaceFinishLine();
-                    raceStartTime = performance.now() - (data.raceTime * 1000);
-                }
-            } else {
-                console.warn(`Unknown data type from ${peerId}:`, data);
-            }
-        }
-
-        function cleanupPeerShip(peerId) {
-            if (peerShips[peerId]) {
-                scene.remove(peerShips[peerId]);
-                delete peerShips[peerId];
-                console.log(`Cleaned up ship for ${peerId}`);
-            }
-        }
-
-        function cleanupMultiplayer() {
-            if (peer) {
-                connections.forEach(conn => conn.close());
-                peer.destroy();
-                peer = null;
-                connections = [];
-                myId = null;
-            }
-            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
-            peerShips = {};
-            if (raceFinishLine) scene.remove(raceFinishLine);
-            raceFinishLine = null;
-            isRaceMode = false;
-            raceStatus.innerText = '';
-            console.log('Multiplayer cleaned up');
-        }
-
-        function createPeerShip(color) {
+        function spawnPeerShip(peerId, color = 0xaaaaaa, pos = [0, 100, 0], rot = [0, 0, 0]) {
+            if (peerShips[peerId]) return;
+            console.log(`Spawning ship for ${peerId} at`, pos);
             const shipGroup = new THREE.Group();
             const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
             const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
@@ -400,17 +339,12 @@
             ring.rotation.x = Math.PI / 2;
             ring.position.y = -0.1;
             shipGroup.add(ring);
-            scene.add(shipGroup);
-            return shipGroup;
-        }
 
-        function createRaceFinishLine() {
-            const geometry = new THREE.RingGeometry(20, 25, 32);
-            const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
-            raceFinishLine = new THREE.Mesh(geometry, material);
-            raceFinishLine.position.set(500, 50, 500);
-            raceFinishLine.rotation.x = Math.PI / 2;
-            scene.add(raceFinishLine);
+            shipGroup.position.fromArray(pos);
+            shipGroup.rotation.set(rot[0], rot[1], rot[2]);
+            scene.add(shipGroup);
+            peerShips[peerId] = shipGroup;
+            status.innerText = `Players: ${Object.keys(peerShips).length + 1}`;
         }
 
         function animate() {
@@ -420,21 +354,21 @@
             updateMovement();
             updateCamera();
             updateBullets();
-            if (isRaceMode) updateRace();
+            if (gameMode === 'multiplayer') syncMultiplayer();
             renderer.render(scene, camera);
         }
 
-        function updateRace() {
-            if (raceFinishLine && ship.position.distanceTo(raceFinishLine.position) < 25) {
-                const timeTaken = (performance.now() - raceStartTime) / 1000;
-                raceStatus.innerText = `Race Finished! Time: ${timeTaken.toFixed(2)}s`;
-                isRaceMode = false;
-                scene.remove(raceFinishLine);
-                raceFinishLine = null;
-            } else if (isRaceMode) {
-                const timeElapsed = (performance.now() - raceStartTime) / 1000;
-                raceStatus.innerText = `Race Time: ${timeElapsed.toFixed(2)}s`;
-            }
+        function syncMultiplayer() {
+            if (!ship || !myId) return;
+            const data = { 
+                id: myId, 
+                pos: ship.position.toArray(), 
+                rot: [ship.rotation.x, ship.rotation.y, ship.rotation.z], 
+                color: selectedColor 
+            };
+            connections.forEach(conn => {
+                if (conn.open) conn.send(data);
+            });
         }
 
         function createCosmicSky() {
@@ -540,6 +474,7 @@
             shipGroup.userData = { health: ships[selectedShip].perk === 'High Durability' ? 2 : 1, lastShot: 0, gunType: ships[selectedShip].gun };
             scene.add(shipGroup);
             ship = shipGroup;
+            status.innerText = `Players: ${Object.keys(peerShips).length + 1}`;
         }
 
         function createObstacles() {
@@ -587,7 +522,6 @@
                     case 'shift': keys.shift = true; break;
                     case 'p': if (!keys.p) togglePause(!isPaused); keys.p = true; break;
                     case 'g': keys.g = true; shoot(); break;
-                    case 'r': if (!keys.r) { isRaceMode = !isRaceMode; if (isRaceMode && !raceFinishLine) { createRaceFinishLine(); raceStartTime = performance.now(); } } keys.r = true; break;
                     case 'escape': if (!isPaused) togglePause(true); else if (confirm('Quit to menu?')) quitButton.click(); break;
                     case '+': case '=': cameraDistance = Math.max(5, cameraDistance - 1); break;
                     case '-': cameraDistance = Math.min(30, cameraDistance + 1); break;
@@ -603,7 +537,6 @@
                     case 'shift': keys.shift = false; break;
                     case 'p': keys.p = false; break;
                     case 'g': keys.g = false; break;
-                    case 'r': keys.r = false; break;
                 }
             });
             document.addEventListener('keydown', onKeyDown);
