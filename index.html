@@ -179,14 +179,12 @@
                 alert('Please select a ship and color!');
                 return;
             }
-            if (gameMode === 'solo' || (gameMode === 'multiplayer' && peer && myId)) {
+            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
             } else if (gameMode === 'multiplayer') {
-                alert('Waiting for connection... Try again in a moment.');
-            } else {
-                alert('For multiplayer, generate or join with a code!');
+                alert('Please generate a code or join a game first!');
             }
         });
 
@@ -284,7 +282,7 @@
 
             peer.on('error', (err) => {
                 console.error('PeerJS Error:', err);
-                if (err.type === 'peer-unavailable') {
+                if (err.type === 'peer-unavailable' && !isHost) {
                     alert('Host not found! Check the code and try again.');
                     cleanupMultiplayer();
                     optionMode.style.display = 'flex';
@@ -294,12 +292,12 @@
         }
 
         function setupMultiplayer() {
-            if (!peer || !myId) return;
-            setInterval(syncShipData, 33); // ~30 FPS sync for smoothness
+            if (!peer) return;
+            setInterval(syncShipData, 33); // ~30 FPS sync
         }
 
         function syncShipData() {
-            if (!ship || isPaused) return;
+            if (!ship || isPaused || !myId) return;
             const data = { 
                 type: 'update', 
                 id: myId, 
@@ -323,7 +321,7 @@
                 }
                 if (data.type === 'update') {
                     const peerShip = peerShips[data.id];
-                    peerShip.position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5); // Smooth interpolation
+                    peerShip.position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
                     peerShip.rotation.fromArray(data.rot);
                     if (data.raceMode && !isRaceMode && !isHost) {
                         isRaceMode = true;
