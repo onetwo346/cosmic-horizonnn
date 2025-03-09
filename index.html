@@ -160,7 +160,6 @@
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
-                joinGameInput.value = gameCode;
                 isHost = true;
                 setupPeer(true);
             }
@@ -169,7 +168,7 @@
         joinGameButton.addEventListener('click', () => {
             if (gameMode === 'multiplayer' && joinGameInput.value) {
                 gameCode = joinGameInput.value.toUpperCase();
-                generatedCodeDisplay.innerText = `Joined: ${gameCode}`;
+                generatedCodeDisplay.innerText = `Joining: ${gameCode}`;
                 isHost = false;
                 setupPeer(false);
             }
@@ -180,10 +179,12 @@
                 alert('Please select a ship and color!');
                 return;
             }
-            if (gameMode === 'solo' || (gameMode === 'multiplayer' && gameCode)) {
+            if (gameMode === 'solo' || (gameMode === 'multiplayer' && peer && myId)) {
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
+            } else if (gameMode === 'multiplayer') {
+                alert('Waiting for connection... Try again in a moment.');
             } else {
                 alert('For multiplayer, generate or join with a code!');
             }
@@ -239,46 +240,105 @@
         }
 
         function setupPeer(isHost) {
-            peer = new Peer(isHost ? gameCode : null, { host: 'peerjs-server.herokuapp.com', secure: true, port: 443 });
+            peer = new Peer(isHost ? gameCode : null, { 
+                host: 'peerjs-server.herokuapp.com', 
+                secure: true, 
+                port: 443, 
+                config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'turn:relay.backupsrv.com', username: 'webrtc', credential: 'webrtc' }] }
+            });
+
             peer.on('open', (id) => {
                 myId = id;
-                console.log(isHost ? `Hosting with ID: ${id}` : `Connected with ID: ${id}`);
+                console.log(isHost ? `Hosting with ID: ${gameCode}` : `Connected with ID: ${id}`);
                 if (!isHost) {
-                    const conn = peer.connect(gameCode);
-                    conn.on('open', () => connections.push(conn));
+                    const conn = peer.connect(gameCode, { reliable: true });
+                    conn.on('open', () => {
+                        connections.push(conn);
+                        conn.send({ type: 'join', id: myId, color: selectedColor });
+                        console.log(`Connected to host: ${gameCode}`);
+                    });
+                    conn.on('data', handlePeerData);
+                    conn.on('close', () => {
+                        connections = connections.filter(c => c !== conn);
+                        cleanupPeerShip(conn.peer);
+                    });
+                    conn.on('error', (err) => console.error(`Connection error: ${err}`));
                 }
             });
+
             peer.on('connection', (conn) => {
                 if (isHost) {
                     connections.push(conn);
+                    conn.on('open', () => {
+                        console.log(`New player connected: ${conn.peer}`);
+                        conn.send({ type: 'welcome', id: myId, color: selectedColor });
+                    });
                     conn.on('data', handlePeerData);
-                    conn.on('close', () => connections = connections.filter(c => c !== conn));
+                    conn.on('close', () => {
+                        connections = connections.filter(c => c !== conn);
+                        cleanupPeerShip(conn.peer);
+                    });
+                    conn.on('error', (err) => console.error(`Host connection error: ${err}`));
                 }
             });
-            peer.on('error', (err) => console.error('PeerJS Error:', err));
+
+            peer.on('error', (err) => {
+                console.error('PeerJS Error:', err);
+                if (err.type === 'peer-unavailable') {
+                    alert('Host not found! Check the code and try again.');
+                    cleanupMultiplayer();
+                    optionMode.style.display = 'flex';
+                    canvas.style.display = 'none';
+                }
+            });
         }
 
         function setupMultiplayer() {
-            if (!peer) return;
-            setInterval(() => {
-                if (ship) {
-                    const data = { id: myId, pos: ship.position.toArray(), rot: ship.rotation.toArray(), color: selectedColor, raceMode: isRaceMode };
-                    connections.forEach(conn => conn.send(data));
-                    if (isHost && isRaceMode) data.raceTime = (performance.now() - raceStartTime) / 1000;
-                }
-            }, 50);
+            if (!peer || !myId) return;
+            setInterval(syncShipData, 33); // ~30 FPS sync for smoothness
+        }
+
+        function syncShipData() {
+            if (!ship || isPaused) return;
+            const data = { 
+                type: 'update', 
+                id: myId, 
+                pos: ship.position.toArray(), 
+                rot: ship.rotation.toArray(), 
+                color: selectedColor, 
+                raceMode: isRaceMode, 
+                raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined 
+            };
+            connections.forEach(conn => {
+                if (conn.open) conn.send(data);
+                else connections = connections.filter(c => c !== conn);
+            });
         }
 
         function handlePeerData(data) {
-            if (!peerShips[data.id]) {
-                peerShips[data.id] = createPeerShip(data.color);
+            if (data.type === 'join' || data.type === 'welcome' || data.type === 'update') {
+                if (!peerShips[data.id]) {
+                    peerShips[data.id] = createPeerShip(data.color);
+                    console.log(`Added peer ship: ${data.id}`);
+                }
+                if (data.type === 'update') {
+                    const peerShip = peerShips[data.id];
+                    peerShip.position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5); // Smooth interpolation
+                    peerShip.rotation.fromArray(data.rot);
+                    if (data.raceMode && !isRaceMode && !isHost) {
+                        isRaceMode = true;
+                        if (!raceFinishLine) createRaceFinishLine();
+                        raceStartTime = performance.now() - (data.raceTime * 1000);
+                    }
+                }
             }
-            peerShips[data.id].position.fromArray(data.pos);
-            peerShips[data.id].rotation.fromArray(data.rot);
-            if (data.raceMode && !isRaceMode && !isHost) {
-                isRaceMode = true;
-                createRaceFinishLine();
-                raceStartTime = performance.now() - (data.raceTime * 1000);
+        }
+
+        function cleanupPeerShip(peerId) {
+            if (peerShips[peerId]) {
+                scene.remove(peerShips[peerId]);
+                delete peerShips[peerId];
+                console.log(`Removed peer ship: ${peerId}`);
             }
         }
 
@@ -288,12 +348,14 @@
                 peer.destroy();
                 peer = null;
                 connections = [];
+                myId = null;
             }
             Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
             peerShips = {};
             if (raceFinishLine) scene.remove(raceFinishLine);
             raceFinishLine = null;
             isRaceMode = false;
+            raceStatus.innerText = '';
         }
 
         function createPeerShip(color) {
