@@ -63,7 +63,7 @@
     </div>
 
     <div id="instructions">
-        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | E: Extract Energy | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down | R: Toggle Race
+        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down | R: Toggle Race
     </div>
     <canvas id="canvas"></canvas>
     <div id="joystick-container">
@@ -195,17 +195,17 @@
             cleanupMultiplayer();
         });
 
-        let camera, scene, renderer, ship, skyMaterial, fogMaterial, cosmicLights = [], npcShips = [], waterfalls = [], fogParticles, obstacles = [], bullets = [], energyRocks = [];
+        let camera, scene, renderer, ship, skyMaterial, fogMaterial, cosmicLights = [], npcShips = [], waterfalls = [], fogParticles, obstacles = [], bullets = [];
         let velocity = new THREE.Vector3();
         let maxSpeed = ships[0].speed, baseAccel = 2.0, boostAccel = 6.0, friction = 0.95, liftSpeed = 4.0, blastSpeed = 40, verticalSpeed = 4.0;
-        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, e: false, escape: false, r: false };
+        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, escape: false, r: false };
         let isUserInteracting = false, onPointerDownMouseX = 0, onPointerDownMouseY = 0, lon = 0, onPointerDownLon = 0, lat = 0, onPointerDownLat = 0, targetLon = 0, targetLat = 0, phi = 0, theta = 0;
         let joystick, joystickRect, joystickCenterX, joystickCenterY, joystickActive = false, joystickTouchId = null;
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
 
         function init() {
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000); // Increased far plane for expanded universe
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
             camera.position.set(0, 10, 15);
 
             renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -222,7 +222,6 @@
             createSkyscraper();
             createNPCShips();
             createObstacles();
-            createEnergyRocks();
             if (isHost && gameMode === 'multiplayer') createRaceFinishLine();
             setupJoystick();
             setupControls();
@@ -238,18 +237,27 @@
 
         function setupMultiplayer() {
             console.log('Setting up multiplayer...');
-            peer = new Peer(isHost ? gameCode : null, { debug: 2 });
+            peer = new Peer(isHost ? gameCode : null, {
+                debug: 2 // Enable PeerJS debug logs
+            });
+
             peer.on('open', (id) => {
                 myId = id;
                 console.log(`Peer opened with ID: ${id}, isHost: ${isHost}, Code: ${gameCode}`);
                 if (!isHost) {
+                    console.log(`Attempting to connect to host with code: ${gameCode}`);
                     const conn = peer.connect(gameCode, { reliable: true });
                     setupConnection(conn);
                 }
             });
+
             peer.on('connection', (conn) => {
-                if (isHost) setupConnection(conn);
+                console.log(`Incoming connection from ${conn.peer}`);
+                if (isHost) {
+                    setupConnection(conn);
+                }
             });
+
             peer.on('error', (err) => {
                 console.error('PeerJS Error:', err.type, err);
                 if (err.type === 'peer-unavailable') {
@@ -259,54 +267,93 @@
                     canvas.style.display = 'none';
                 }
             });
-            setTimeout(() => setInterval(syncShipData, 33), 1000);
+
+            // Start syncing after a short delay to ensure ship exists
+            setTimeout(() => {
+                console.log('Starting position sync...');
+                setInterval(syncShipData, 33); // ~30 FPS
+            }, 1000);
         }
 
         function setupConnection(conn) {
             connections.push(conn);
             conn.on('open', () => {
+                console.log(`Connection established with ${conn.peer}`);
                 const initialData = {
-                    type: 'init', id: myId, color: selectedColor,
-                    pos: ship.position.toArray(), rot: ship.rotation.toArray(),
-                    upgrades: ship.userData.upgrades || {}
+                    type: 'init',
+                    id: myId,
+                    color: selectedColor,
+                    pos: ship ? ship.position.toArray() : [0, 100, 0],
+                    rot: ship ? ship.rotation.toArray() : [0, 0, 0]
                 };
                 conn.send(initialData);
+                console.log(`Sent initial data to ${conn.peer}:`, initialData);
             });
-            conn.on('data', updatePeerShip);
+
+            conn.on('data', (data) => {
+                console.log(`Received data from ${conn.peer}:`, data);
+                if (data.id && data.pos && data.rot) {
+                    updatePeerShip(data);
+                }
+            });
+
             conn.on('close', () => {
+                console.log(`Connection closed with ${conn.peer}`);
                 connections = connections.filter(c => c !== conn);
                 if (peerShips[conn.peer]) {
                     scene.remove(peerShips[conn.peer]);
                     delete peerShips[conn.peer];
+                    console.log(`Removed ship for ${conn.peer}`);
                 }
             });
-            conn.on('error', (err) => console.error(`Connection error with ${conn.peer}:`, err));
+
+            conn.on('error', (err) => {
+                console.error(`Connection error with ${conn.peer}:`, err);
+            });
         }
 
         function syncShipData() {
-            if (!ship || !myId || connections.length === 0 || isPaused) return;
+            if (!ship || !myId || connections.length === 0 || isPaused) {
+                console.log('Sync skipped:', { hasShip: !!ship, hasId: !!myId, connections: connections.length, isPaused });
+                return;
+            }
+
             const data = {
-                type: 'update', id: myId,
-                pos: ship.position.toArray(), rot: ship.rotation.toArray(),
-                color: selectedColor, bullets: bullets.map(b => ({ pos: b.position.toArray(), vel: b.userData.velocity.toArray(), type: b.userData.type })),
-                upgrades: ship.userData.upgrades || {},
-                raceMode: isRaceMode, raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined
+                type: 'update',
+                id: myId,
+                pos: ship.position.toArray(),
+                rot: ship.rotation.toArray(),
+                color: selectedColor,
+                raceMode: isRaceMode,
+                raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined
             };
-            connections.forEach(conn => conn.open && conn.send(data));
+
+            connections.forEach(conn => {
+                if (conn.open) {
+                    conn.send(data);
+                    console.log(`Sent update to ${conn.peer}:`, data.pos);
+                } else {
+                    console.log(`Connection to ${conn.peer} not open`);
+                }
+            });
         }
 
         function updatePeerShip(data) {
             const peerId = data.id;
-            if (!peerId || peerId === myId) return;
+            if (!peerId || peerId === myId) return; // Ignore own data
+
             if (!peerShips[peerId]) {
+                console.log(`Creating new ship for ${peerId}`);
                 peerShips[peerId] = createPeerShip(data.color);
-                scene.add(peerShips[peerId]);
+                scene.add(peerShips[peerId]); // Ensure it's added to the scene
             }
+
             const peerShip = peerShips[peerId];
-            peerShip.position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
+            const targetPos = new THREE.Vector3().fromArray(data.pos);
+            peerShip.position.lerp(targetPos, 0.5); // Smooth movement
             peerShip.rotation.fromArray(data.rot);
-            if (data.upgrades) peerShip.userData.upgrades = data.upgrades;
-            if (data.bullets) data.bullets.forEach(b => createPeerBullet(b.pos, b.vel, b.type));
+            console.log(`Updated ${peerId} to pos:`, peerShip.position.toArray());
+
             if (data.raceMode && !isRaceMode && !isHost) {
                 isRaceMode = true;
                 if (!raceFinishLine) createRaceFinishLine();
@@ -316,25 +363,23 @@
 
         function createPeerShip(color) {
             const shipGroup = new THREE.Group();
-            const base = new THREE.Mesh(new THREE.CylinderGeometry(3, 2.5, 0.8, 16), new THREE.MeshPhongMaterial({ color, shininess: 50 }));
+            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
             shipGroup.add(base);
-            const dome = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 8), new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 }));
+            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
+            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
+            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
             dome.position.y = 0.8;
             shipGroup.add(dome);
-            const ring = new THREE.Mesh(new THREE.TorusGeometry(2, 0.2, 6, 16), new THREE.MeshBasicMaterial({ color, emissive: color }));
+            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
+            const ringMaterial = new THREE.MeshBasicMaterial({ color, emissive: color });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
             ring.rotation.x = Math.PI / 2;
             ring.position.y = -0.1;
             shipGroup.add(ring);
-            shipGroup.userData = { upgrades: {} };
+            console.log(`Created peer ship with color ${color.toString(16)}`);
             return shipGroup;
-        }
-
-        function createPeerBullet(pos, vel, type) {
-            const bullet = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff00ff }));
-            bullet.position.fromArray(pos);
-            bullet.userData = { velocity: new THREE.Vector3().fromArray(vel), type, damage: type === 'Explosive' ? 2 : 1 };
-            scene.add(bullet);
-            bullets.push(bullet);
         }
 
         function cleanupMultiplayer() {
@@ -351,6 +396,7 @@
             raceFinishLine = null;
             isRaceMode = false;
             raceStatus.innerText = '';
+            console.log('Multiplayer cleaned up');
         }
 
         function createRaceFinishLine() {
@@ -369,7 +415,6 @@
             updateMovement();
             updateCamera();
             updateBullets();
-            updateEnergyRocks();
             if (isRaceMode) updateRace();
             renderer.render(scene, camera);
         }
@@ -388,80 +433,54 @@
         }
 
         function createCosmicSky() {
-            const skyGeometry = new THREE.SphereGeometry(8000, 64, 64); // Expanded skybox
+            const skyGeometry = new THREE.SphereGeometry(3000, 32, 32);
             skyGeometry.scale(-1, 1, 1);
-            const uniforms = { 
-                time: { value: 0 }, 
-                baseColor: { value: new THREE.Vector3(0.05, 0.1, 0.3) }, 
-                pulseIntensity: { value: 0.5 }, 
-                dayNight: { value: 0 }, 
-                starAlpha: { value: 1 } 
-            };
-            const vertexShader = `
-                varying vec3 vWorldPosition;
-                void main() {
-                    vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `;
-            const fragmentShader = `
-                uniform float time; uniform vec3 baseColor; uniform float pulseIntensity; uniform float dayNight; uniform float starAlpha;
-                varying vec3 vWorldPosition;
-                void main() {
-                    vec3 dir = normalize(vWorldPosition);
-                    float noise = sin(dir.x * 3.0 + time) * cos(dir.y * 3.0 + time) * 0.5;
-                    vec3 nightColor = mix(baseColor, vec3(0.8, 0.4, 0.6), noise + 0.5);
-                    vec3 dayColor = mix(vec3(0.7, 0.9, 1.0), vec3(1.0, 1.0, 0.9), noise + 0.5);
-                    vec3 color = mix(nightColor, dayColor, dayNight);
-                    float pulse = sin(time * 0.5 + dir.z * 5.0) * pulseIntensity * starAlpha;
-                    gl_FragColor = vec4(color + pulse * 0.3, 1.0);
-                }
-            `;
+            const uniforms = { time: { value: 0 }, baseColor: { value: new THREE.Vector3(0.05, 0.1, 0.3) }, pulseIntensity: { value: 0.5 }, dayNight: { value: 0 } };
+            const vertexShader = `varying vec3 vWorldPosition; void main() { vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+            const fragmentShader = `uniform float time; uniform vec3 baseColor; uniform float pulseIntensity; uniform float dayNight; varying vec3 vWorldPosition; void main() { vec3 dir = normalize(vWorldPosition); float noise = sin(dir.x * 3.0 + time) * cos(dir.y * 3.0 + time) * 0.5; vec3 nightColor = mix(baseColor, vec3(0.8, 0.4, 0.6), noise + 0.5); vec3 dayColor = mix(vec3(0.7, 0.9, 1.0), vec3(1.0, 1.0, 0.9), noise + 0.5); vec3 color = mix(nightColor, dayColor, dayNight); float pulse = sin(time * 0.5 + dir.z * 5.0) * pulseIntensity * (1.0 - dayNight); gl_FragColor = vec4(color + pulse * 0.3, 1.0); }`;
             skyMaterial = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader, side: THREE.BackSide });
             const sky = new THREE.Mesh(skyGeometry, skyMaterial);
             scene.add(sky);
 
-            // Sun
-            const sunGeometry = new THREE.SphereGeometry(50, 32, 32);
-            const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa00, emissive: 0xffaa00 });
-            const sun = new THREE.Mesh(sunGeometry, sunMaterial);
-            sun.position.set(0, 5000, 0); // High above for day/night
-            scene.add(sun);
-            const sunLight = new THREE.PointLight(0xffffaa, 2, 10000);
-            sun.add(sunLight);
-            cosmicLights.push(sun);
+            for (let i = 0; i < 3; i++) {
+                const lightGeometry = new THREE.SphereGeometry(8 - i * 2, 16, 16);
+                const lightMaterial = new THREE.MeshBasicMaterial({ color: i === 0 ? 0xffaa88 : i === 1 ? 0x88ccff : 0xffff88 });
+                const light = new THREE.Mesh(lightGeometry, lightMaterial);
+                scene.add(light);
+                cosmicLights.push(light);
+                const pointLight = new THREE.PointLight(lightMaterial.color, 2, 1500);
+                pointLight.castShadow = true;
+                pointLight.shadow.mapSize.width = 1024;
+                pointLight.shadow.mapSize.height = 1024;
+                light.add(pointLight);
+            }
 
-            // Stars
-            const starGeometry = new THREE.BufferGeometry();
-            const starVertices = [];
-            for (let i = 0; i < 20000; i++) starVertices.push((Math.random() - 0.5) * 16000, Math.random() * 8000, (Math.random() - 0.5) * 16000); // Expanded starfield
-            starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
-            const starMaterial = new THREE.PointsMaterial({ color: 0xaaaaff, size: 3, transparent: true, blending: THREE.AdditiveBlending });
-            const stars = new THREE.Points(starGeometry, starMaterial);
-            scene.add(stars);
-            cosmicLights.push(stars); // For star alpha control
+            const particleGeometry = new THREE.BufferGeometry();
+            const particleVertices = [];
+            for (let i = 0; i < 8000; i++) particleVertices.push((Math.random() - 0.5) * 3500, Math.random() * 1500 + 50, (Math.random() - 0.5) * 3500);
+            particleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particleVertices, 3));
+            const particleMaterial = new THREE.PointsMaterial({ color: 0xaaaaff, size: 2, transparent: true, blending: THREE.AdditiveBlending });
+            scene.add(new THREE.Points(particleGeometry, particleMaterial));
+            scene.add(new THREE.AmbientLight(0x404060, 0.6));
         }
 
         function createTerrain() {
-            const groundGeometry = new THREE.PlaneGeometry(16000, 16000, 512, 512); // Doubled size
+            const groundGeometry = new THREE.PlaneGeometry(8000, 8000, 512, 512);
             groundGeometry.rotateX(-Math.PI / 2);
             const vertices = groundGeometry.attributes.position.array;
             for (let i = 0; i < vertices.length; i += 3) {
                 const x = vertices[i], z = vertices[i + 2];
                 const distance = Math.sqrt(x * x + z * z);
-                vertices[i + 1] = fractalNoise(x, z) * Math.max(0, 1 - distance / 7000);
+                vertices[i + 1] = fractalNoise(x, z) * Math.max(0, 1 - distance / 3500);
             }
             groundGeometry.computeVertexNormals();
-            const groundMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x1e2a4a, roughness: 0.7, metalness: 0.2, 
-                emissive: 0x552288, emissiveIntensity: 0.8, vertexColors: true 
-            });
+            const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x1e2a4a, roughness: 0.7, metalness: 0.2, emissive: 0x102030, emissiveIntensity: 0.8, vertexColors: true });
             const ground = new THREE.Mesh(groundGeometry, groundMaterial);
             ground.receiveShadow = true;
             scene.add(ground);
 
-            for (let i = 0; i < 20; i++) { // More waterfalls in expanded world
-                const x = (Math.random() - 0.5) * 14000, z = (Math.random() - 0.5) * 14000, y = fractalNoise(x, z);
+            for (let i = 0; i < 12; i++) {
+                const x = (Math.random() - 0.5) * 7000, z = (Math.random() - 0.5) * 7000, y = fractalNoise(x, z);
                 if (y < -15) createWaterfall(x, y + 20, z);
             }
             addEnvironmentDetails();
@@ -469,22 +488,33 @@
 
         function createShip() {
             const shipGroup = new THREE.Group();
-            const base = new THREE.Mesh(new THREE.CylinderGeometry(3, 2.5, 0.8, 16), new THREE.MeshPhongMaterial({ color: selectedColor, shininess: 50 }));
+            const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color: selectedColor, shininess: 50 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
             base.castShadow = true;
             shipGroup.add(base);
-            const dome = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 8), new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 }));
+
+            const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
+            const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
+            const dome = new THREE.Mesh(domeGeometry, domeMaterial);
             dome.position.y = 0.8;
             dome.castShadow = true;
             shipGroup.add(dome);
-            const ring = new THREE.Mesh(new THREE.TorusGeometry(2, 0.2, 6, 16), new THREE.MeshBasicMaterial({ color: selectedColor, emissive: selectedColor }));
+
+            const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
+            const ringMaterial = new THREE.MeshBasicMaterial({ color: selectedColor, emissive: selectedColor });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
             ring.rotation.x = Math.PI / 2;
             ring.position.y = -0.1;
             shipGroup.add(ring);
 
             if (gameMode === 'multiplayer' && gameCode) {
-                const plate = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+                const plateGeometry = new THREE.PlaneGeometry(2, 0.5);
+                const plateMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+                const plate = new THREE.Mesh(plateGeometry, plateMaterial);
                 plate.position.set(0, 0, 2.5);
                 plate.rotation.y = Math.PI;
+
                 const canvas = document.createElement('canvas');
                 canvas.width = 256;
                 canvas.height = 64;
@@ -495,48 +525,28 @@
                 ctx.font = 'bold 40px Arial';
                 ctx.textAlign = 'center';
                 ctx.fillText(gameCode, 128, 45);
-                plate.material.map = new THREE.CanvasTexture(canvas);
+                const texture = new THREE.CanvasTexture(canvas);
+                plate.material.map = texture;
                 plate.material.needsUpdate = true;
                 shipGroup.add(plate);
             }
 
             shipGroup.position.set(0, 100, 0);
-            shipGroup.userData = { 
-                health: ships[selectedShip].perk === 'High Durability' ? 2 : 1, 
-                lastShot: 0, gunType: ships[selectedShip].gun, 
-                upgrades: {} 
-            };
+            shipGroup.userData = { health: ships[selectedShip].perk === 'High Durability' ? 2 : 1, lastShot: 0, gunType: ships[selectedShip].gun };
             scene.add(shipGroup);
             ship = shipGroup;
         }
 
         function createObstacles() {
-            const numObstacles = gameMode === 'solo' ? 30 : 15; // More in solo
+            const numObstacles = gameMode === 'solo' ? 20 : 10;
             for (let i = 0; i < numObstacles; i++) {
-                const obstacle = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({ color: 0xff5555 }));
-                obstacle.position.set((Math.random() - 0.5) * 14000, Math.random() * 200 + 50, (Math.random() - 0.5) * 14000);
+                const obstacleGeometry = new THREE.BoxGeometry(10, 10, 10);
+                const obstacleMaterial = new THREE.MeshBasicMaterial({ color: 0xff5555 });
+                const obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
+                obstacle.position.set((Math.random() - 0.5) * 7000, Math.random() * 100 + 50, (Math.random() - 0.5) * 7000);
                 obstacle.userData = { health: 3 };
                 scene.add(obstacle);
                 obstacles.push(obstacle);
-            }
-        }
-
-        function createEnergyRocks() {
-            const rockTypes = [
-                { name: 'Zorium', color: 0xff3333, upgrade: 'speed', boost: 2.0 },
-                { name: 'Luminite', color: 0x3333ff, upgrade: 'shields', boost: 1 },
-                { name: 'Graviton', color: 0x9933ff, upgrade: 'damage', boost: 1 }
-            ];
-            for (let i = 0; i < 50; i++) {
-                const type = rockTypes[Math.floor(Math.random() * rockTypes.length)];
-                const rock = new THREE.Mesh(
-                    new THREE.DodecahedronGeometry(5, 0),
-                    new THREE.MeshPhongMaterial({ color: type.color, emissive: type.color, emissiveIntensity: 0.5 })
-                );
-                rock.position.set((Math.random() - 0.5) * 14000, fractalNoise(rock.position.x, rock.position.z) + 10, (Math.random() - 0.5) * 14000);
-                rock.userData = { type: type.name, upgrade: type.upgrade, boost: type.boost, extracting: false, extractTime: 0 };
-                scene.add(rock);
-                energyRocks.push(rock);
             }
         }
 
@@ -546,23 +556,14 @@
             if (now - ship.userData.lastShot < cooldown) return;
             ship.userData.lastShot = now;
 
-            const bullet = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff00ff }));
+            const bulletGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+            const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
             bullet.position.copy(ship.position);
             const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-            const speed = ships[selectedShip].perk === 'Long Range' ? 30 : 20;
-            bullet.userData = { 
-                velocity: direction.clone().multiplyScalar(speed), 
-                type: ships[selectedShip].gun, 
-                damage: (ships[selectedShip].perk === 'Explosive Shots' ? 2 : 1) + (ship.userData.upgrades.damage || 0) 
-            };
+            bullet.userData = { velocity: direction.clone().multiplyScalar(ships[selectedShip].perk === 'Long Range' ? 30 : 20), type: ships[selectedShip].gun, damage: ships[selectedShip].perk === 'Explosive Shots' ? 2 : 1 };
             scene.add(bullet);
             bullets.push(bullet);
-
-            // Muzzle flash
-            const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.8 }));
-            flash.position.copy(ship.position).add(direction.multiplyScalar(3));
-            scene.add(flash);
-            setTimeout(() => scene.remove(flash), 100);
         }
 
         function togglePause(state) {
@@ -581,7 +582,6 @@
                     case 'shift': keys.shift = true; break;
                     case 'p': if (!keys.p) togglePause(!isPaused); keys.p = true; break;
                     case 'g': keys.g = true; shoot(); break;
-                    case 'e': keys.e = true; break;
                     case 'r': if (!keys.r) { isRaceMode = !isRaceMode; if (isRaceMode && !raceFinishLine) { createRaceFinishLine(); raceStartTime = performance.now(); } } keys.r = true; break;
                     case 'escape': if (!isPaused) togglePause(true); else if (confirm('Quit to menu?')) quitButton.click(); break;
                     case '+': case '=': cameraDistance = Math.max(5, cameraDistance - 1); break;
@@ -598,7 +598,6 @@
                     case 'shift': keys.shift = false; break;
                     case 'p': keys.p = false; break;
                     case 'g': keys.g = false; break;
-                    case 'e': keys.e = false; break;
                     case 'r': keys.r = false; break;
                 }
             });
@@ -617,7 +616,6 @@
                 obstacles.forEach(obstacle => {
                     if (bullet.position.distanceTo(obstacle.position) < 5) {
                         obstacle.userData.health -= bullet.userData.damage;
-                        createHitEffect(bullet.position);
                         if (obstacle.userData.health <= 0) {
                             scene.remove(obstacle);
                             obstacles.splice(obstacles.indexOf(obstacle), 1);
@@ -630,52 +628,10 @@
                 if (gameMode === 'multiplayer') {
                     Object.values(peerShips).forEach(peerShip => {
                         if (bullet.position.distanceTo(peerShip.position) < 5) {
-                            createHitEffect(bullet.position);
                             scene.remove(bullet);
                             bullets.splice(index, 1);
                         }
                     });
-                }
-            });
-        }
-
-        function createHitEffect(position) {
-            const particles = new THREE.Points(
-                new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(50 * 3), 3)),
-                new THREE.PointsMaterial({ color: 0xff00ff, size: 2, transparent: true, blending: THREE.AdditiveBlending })
-            );
-            const positions = particles.geometry.attributes.position.array;
-            for (let i = 0; i < positions.length; i += 3) {
-                positions[i] = position.x + (Math.random() - 0.5) * 5;
-                positions[i + 1] = position.y + (Math.random() - 0.5) * 5;
-                positions[i + 2] = position.z + (Math.random() - 0.5) * 5;
-            }
-            particles.geometry.attributes.position.needsUpdate = true;
-            scene.add(particles);
-            setTimeout(() => scene.remove(particles), 500);
-        }
-
-        function updateEnergyRocks() {
-            if (!keys.e) return;
-            energyRocks.forEach((rock, index) => {
-                if (ship.position.distanceTo(rock.position) < 10) {
-                    if (!rock.userData.extracting) {
-                        rock.userData.extracting = true;
-                        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 10, 8), new THREE.MeshBasicMaterial({ color: rock.material.color, transparent: true, opacity: 0.5 }));
-                        beam.position.lerpVectors(ship.position, rock.position, 0.5);
-                        beam.lookAt(rock.position);
-                        scene.add(beam);
-                        rock.userData.beam = beam;
-                    }
-                    rock.userData.extractTime += 0.016; // ~60 FPS
-                    if (rock.userData.extractTime >= 5) {
-                        ship.userData.upgrades[rock.userData.upgrade] = (ship.userData.upgrades[rock.userData.upgrade] || 0) + rock.userData.boost;
-                        maxSpeed += rock.userData.upgrade === 'speed' ? rock.userData.boost : 0;
-                        ship.userData.health += rock.userData.upgrade === 'shields' ? rock.userData.boost : 0;
-                        scene.remove(rock.userData.beam);
-                        scene.remove(rock);
-                        energyRocks.splice(index, 1);
-                    }
                 }
             });
         }
@@ -695,7 +651,9 @@
         function createWaterfall(x, y, z) {
             const particleGeometry = new THREE.BufferGeometry();
             const particleVertices = [];
-            for (let i = 0; i < 400; i++) particleVertices.push(x + (Math.random() - 0.5) * 12, y - Math.random() * 25, z + (Math.random() - 0.5) * 12);
+            for (let i = 0; i < 400; i++) {
+                particleVertices.push(x + (Math.random() - 0.5) * 12, y - Math.random() * 25, z + (Math.random() - 0.5) * 12);
+            }
             particleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particleVertices, 3));
             const particleMaterial = new THREE.PointsMaterial({ color: 0x88ccff, size: 0.6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, emissive: 0x88ccff, emissiveIntensity: 0.4 });
             const waterfall = new THREE.Points(particleGeometry, particleMaterial);
@@ -705,63 +663,11 @@
         }
 
         function createVolumetricFog() {
-            const fogGeometry = new THREE.PlaneGeometry(16000, 16000); // Match expanded terrain
+            const fogGeometry = new THREE.PlaneGeometry(10000, 10000);
             fogGeometry.rotateX(-Math.PI / 2);
-            const fogUniforms = { time: { value: 0 }, color: { value: new THREE.Color(0xaaffcc) }, fogDensity: { value: 0.01 } }; // Lower density for larger world
+            const fogUniforms = { time: { value: 0 }, color: { value: new THREE.Color(0xaaffcc) }, fogDensity: { value: 0.015 } };
             const fogVertexShader = `varying vec3 vWorldPosition; void main() { vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-            const fogFragmentShader = `
-                uniform float time; uniform vec3 color; uniform float fogDensity; varying vec3 vWorldPosition;
-                vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-                vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-                vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-                vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-                float snoise(vec3 v) {
-                    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-                    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-                    vec3 i = floor(v + dot(v, C.yyy));
-                    vec3 x0 = v - i + dot(i, C.xxx);
-                    vec3 g = step(x0.yzx, x0.xyz);
-                    vec3 l = 1.0 - g;
-                    vec3 i1 = min(g.xyz, l.zxy);
-                    vec3 i2 = max(g.xyz, l.zxy);
-                    vec3 x1 = x0 - i1 + C.xxx;
-                    vec3 x2 = x0 - i2 + C.yyy;
-                    vec3 x3 = x0 - D.yyy;
-                    i = mod289(i);
-                    vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-                    float n_ = 0.142857142857;
-                    vec3 ns = n_ * D.wyz - D.xzx;
-                    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-                    vec4 x_ = floor(j * ns.z);
-                    vec4 y_ = floor(j - 7.0 * x_);
-                    vec4 x = x_ * ns.x + ns.yyyy;
-                    vec4 y = y_ * ns.x + ns.yyyy;
-                    vec4 h = 1.0 - abs(x) - abs(y);
-                    vec4 b0 = vec4(x.xy, y.xy);
-                    vec4 b1 = vec4(x.zw, y.zw);
-                    vec4 s0 = floor(b0)*2.0 + 1.0;
-                    vec4 s1 = floor(b1)*2.0 + 1.0;
-                    vec4 sh = -step(h, vec4(0.0));
-                    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-                    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-                    vec3 p0 = vec3(a0.xy, h.x);
-                    vec3 p1 = vec3(a0.zw, h.y);
-                    vec3 p2 = vec3(a1.xy, h.z);
-                    vec3 p3 = vec3(a1.zw, h.w);
-                    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-                    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
-                    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-                    m = m * m;
-                    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
-                }
-                void main() {
-                    vec3 pos = vWorldPosition;
-                    float noise = snoise(pos * 0.04 + vec3(0.0, time * 0.08, 0.0)) * 0.5 + 0.5;
-                    float heightFade = smoothstep(-30.0, 100.0, pos.y);
-                    float density = fogDensity * noise * (1.0 - heightFade);
-                    gl_FragColor = vec4(color, density);
-                }
-            `;
+            const fogFragmentShader = `uniform float time; uniform vec3 color; uniform float fogDensity; varying vec3 vWorldPosition; vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; } vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; } vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); } vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; } float snoise(vec3 v) { const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0); vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx); vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy); vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy; i = mod289(i); vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0)); float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx; vec4 j = p - 49.0 * floor(p * ns.z * ns.z); vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_); vec4 x = x_ *ns.x + ns.yyyy; vec4 y = y_ *ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y); vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw); vec4 s0 = floor(b0)*2.0 + 1.0; vec4 s1 = floor(b1)*2.0 + 1.0; vec4 sh = -step(h, vec4(0.0)); vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww; vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w); vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3))); p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w; vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m * m; return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3))); } void main() { vec3 pos = vWorldPosition; float noise = snoise(pos * 0.04 + vec3(0.0, time * 0.08, 0.0)) * 0.5 + 0.5; float heightFade = smoothstep(-30.0, 80.0, pos.y); float density = fogDensity * noise * (1.0 - heightFade); gl_FragColor = vec4(color, density); }`;
             fogMaterial = new THREE.ShaderMaterial({ uniforms: fogUniforms, vertexShader: fogVertexShader, fragmentShader: fogFragmentShader, transparent: true, side: THREE.DoubleSide });
             const fogLayer = new THREE.Mesh(fogGeometry, fogMaterial);
             fogLayer.position.y = 25;
@@ -769,7 +675,7 @@
 
             const fogParticleGeometry = new THREE.BufferGeometry();
             const fogParticleVertices = [];
-            for (let i = 0; i < 5000; i++) fogParticleVertices.push((Math.random() - 0.5) * 16000, Math.random() * 150, (Math.random() - 0.5) * 16000); // More fog in bigger world
+            for (let i = 0; i < 3000; i++) fogParticleVertices.push((Math.random() - 0.5) * 8000, Math.random() * 100, (Math.random() - 0.5) * 8000);
             fogParticleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(fogParticleVertices, 3));
             const fogParticleMaterial = new THREE.PointsMaterial({ color: 0xaaffcc, size: 6, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending });
             fogParticles = new THREE.Points(fogParticleGeometry, fogParticleMaterial);
@@ -778,93 +684,121 @@
 
         function createSkyscraper() {
             const skyscraperGroup = new THREE.Group();
-            const tower = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 100, 16), new THREE.MeshPhongMaterial({ color: 0x3a5a7a, shininess: 50 }));
+            const towerGeometry = new THREE.CylinderGeometry(5, 5, 100, 16);
+            const towerMaterial = new THREE.MeshPhongMaterial({ color: 0x3a5a7a, shininess: 50 });
+            const tower = new THREE.Mesh(towerGeometry, towerMaterial);
             tower.position.y = 50;
             tower.castShadow = true;
             tower.receiveShadow = true;
             skyscraperGroup.add(tower);
-            const platform = new THREE.Mesh(new THREE.CircleGeometry(10, 16), new THREE.MeshBasicMaterial({ color: 0x00ccff, emissive: 0x00ccff }));
+
+            const platformGeometry = new THREE.CircleGeometry(10, 16);
+            const platformMaterial = new THREE.MeshBasicMaterial({ color: 0x00ccff, emissive: 0x00ccff });
+            const platform = new THREE.Mesh(platformGeometry, platformMaterial);
             platform.rotation.x = -Math.PI / 2;
             platform.position.y = 100;
             platform.receiveShadow = true;
             skyscraperGroup.add(platform);
+
             skyscraperGroup.position.set(0, 0, 0);
             scene.add(skyscraperGroup);
         }
 
         function createNPCShips() {
             const colors = [0xffaa88, 0x88ccff, 0xddaaff, 0xffff88, 0xff88ff];
-            for (let i = 0; i < 12; i++) { // More NPCs in expanded world
+            for (let i = 0; i < 8; i++) {
                 const npcShip = new THREE.Group();
-                const base = new THREE.Mesh(new THREE.CylinderGeometry(3, 2.5, 0.8, 16), new THREE.MeshPhongMaterial({ color: colors[i % 5], shininess: 50 }));
+                const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
+                const baseMaterial = new THREE.MeshPhongMaterial({ color: colors[i % 5], shininess: 50 });
+                const base = new THREE.Mesh(baseGeometry, baseMaterial);
                 base.castShadow = true;
                 npcShip.add(base);
-                const dome = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 8), new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 }));
+
+                const domeGeometry = new THREE.SphereGeometry(1.5, 16, 8);
+                const domeMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.8, shininess: 100 });
+                const dome = new THREE.Mesh(domeGeometry, domeMaterial);
                 dome.position.y = 0.8;
                 dome.castShadow = true;
                 npcShip.add(dome);
-                const ring = new THREE.Mesh(new THREE.TorusGeometry(2, 0.2, 6, 16), new THREE.MeshBasicMaterial({ color: colors[i % 5], emissive: colors[i % 5] }));
+
+                const ringGeometry = new THREE.TorusGeometry(2, 0.2, 6, 16);
+                const ringMaterial = new THREE.MeshBasicMaterial({ color: colors[i % 5], emissive: colors[i % 5] });
+                const ring = new THREE.Mesh(ringGeometry, ringMaterial);
                 ring.rotation.x = Math.PI / 2;
                 ring.position.y = -0.1;
                 npcShip.add(ring);
-                npcShip.position.set(Math.random() * 4000 - 2000, 50 + Math.random() * 300, Math.random() * 4000 - 2000);
-                npcShip.userData = { speed: Math.random() * 0.05 + 0.03, orbitRadius: Math.random() * 1200 + 600, orbitAngle: Math.random() * Math.PI * 2, heightAngle: Math.random() * Math.PI };
+
+                npcShip.position.set(Math.random() * 2000 - 1000, 50 + Math.random() * 150, Math.random() * 2000 - 1000);
+                npcShip.userData = { speed: Math.random() * 0.05 + 0.03, orbitRadius: Math.random() * 600 + 300, orbitAngle: Math.random() * Math.PI * 2, heightAngle: Math.random() * Math.PI };
                 scene.add(npcShip);
                 npcShips.push(npcShip);
             }
         }
 
         function addEnvironmentDetails() {
-            for (let i = 0; i < 50; i++) { // More orbs
-                const orb = new THREE.Mesh(new THREE.SphereGeometry(Math.random() * 4 + 2, 12, 12), new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.75 }));
-                orb.position.set(Math.random() * 14000 - 7000, Math.random() * 200 + 150, Math.random() * 14000 - 7000);
+            for (let i = 0; i < 30; i++) {
+                const orbGeometry = new THREE.SphereGeometry(Math.random() * 4 + 2, 12, 12);
+                const orbMaterial = new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.75 });
+                const orb = new THREE.Mesh(orbGeometry, orbMaterial);
+                orb.position.set(Math.random() * 7000 - 3500, Math.random() * 100 + 150, Math.random() * 7000 - 3500);
                 orb.userData = { speed: Math.random() * 0.015 + 0.01, hover: Math.random() * 3 };
                 scene.add(orb);
             }
 
             function createSpire(x, z) {
-                const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.8, 6, 6), new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.65 }));
+                const baseGeometry = new THREE.CylinderGeometry(0.5, 0.8, 6, 6);
+                const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.65 });
+                const base = new THREE.Mesh(baseGeometry, baseMaterial);
                 base.position.set(x, fractalNoise(x, z) + 3, z);
                 base.castShadow = true;
-                const spire = new THREE.Mesh(new THREE.TetrahedronGeometry(3, 0), new THREE.MeshPhongMaterial({ color: 0x00aaff, emissive: 0x0077cc, shininess: 100, transparent: true, opacity: 0.9 }));
+
+                const spireGeometry = new THREE.TetrahedronGeometry(3, 0);
+                const spireMaterial = new THREE.MeshPhongMaterial({ color: 0x00aaff, emissive: 0x0077cc, shininess: 100, transparent: true, opacity: 0.9 });
+                const spire = new THREE.Mesh(spireGeometry, spireMaterial);
                 spire.position.set(x, fractalNoise(x, z) + 7, z);
                 spire.castShadow = true;
                 spire.rotation.y = Math.random() * Math.PI;
+
                 scene.add(base, spire);
             }
 
-            for (let i = 0; i < 150; i++) {
+            for (let i = 0; i < 100; i++) {
                 const angle = Math.random() * Math.PI * 2;
-                const radius = Math.random() * 4000 + 1000;
+                const radius = Math.random() * 2000 + 500;
                 createSpire(Math.cos(angle) * radius, Math.sin(angle) * radius);
             }
 
-            for (let i = 0; i < 20; i++) {
-                const pool = new THREE.Mesh(new THREE.CircleGeometry(12 + Math.random() * 6, 16), new THREE.MeshBasicMaterial({ color: 0x00ccff, emissive: 0x00ccff, transparent: true, opacity: 0.6 }));
+            for (let i = 0; i < 15; i++) {
+                const poolGeometry = new THREE.CircleGeometry(12 + Math.random() * 6, 16);
+                const poolMaterial = new THREE.MeshBasicMaterial({ color: 0x00ccff, emissive: 0x00ccff, transparent: true, opacity: 0.6 });
+                const pool = new THREE.Mesh(poolGeometry, poolMaterial);
                 pool.rotation.x = -Math.PI / 2;
-                const x = Math.random() * 14000 - 7000;
-                const z = Math.random() * 14000 - 7000;
+                const x = Math.random() * 7000 - 3500;
+                const z = Math.random() * 7000 - 3500;
                 pool.position.set(x, fractalNoise(x, z) + 0.1, z);
                 scene.add(pool);
             }
 
-            for (let i = 0; i < 12; i++) {
+            for (let i = 0; i < 8; i++) {
                 const islandGeometry = new THREE.PlaneGeometry(40 + Math.random() * 20, 40 + Math.random() * 20, 12, 12);
                 islandGeometry.rotateX(-Math.PI / 2);
                 const vertices = islandGeometry.attributes.position.array;
                 for (let j = 0; j < vertices.length; j += 3) vertices[j + 1] += Math.random() * 10 - 5;
                 islandGeometry.computeVertexNormals();
-                const island = new THREE.Mesh(islandGeometry, new THREE.MeshStandardMaterial({ color: 0x304a7a, roughness: 0.9 }));
-                island.position.set(Math.random() * 14000 - 7000, 80 + Math.random() * 120, Math.random() * 14000 - 7000);
+                const islandMaterial = new THREE.MeshStandardMaterial({ color: 0x304a7a, roughness: 0.9 });
+                const island = new THREE.Mesh(islandGeometry, islandMaterial);
+                island.position.set(Math.random() * 7000 - 3500, 80 + Math.random() * 80, Math.random() * 7000 - 3500);
                 island.castShadow = true;
                 island.receiveShadow = true;
                 scene.add(island);
             }
 
-            for (let i = 0; i < 60; i++) {
-                const crystal = new THREE.Mesh(new THREE.TetrahedronGeometry(3 + Math.random() * 2, 1), new THREE.MeshPhongMaterial({ color: 0x00ffcc, emissive: 0x00cc99, shininess: 80, transparent: true, opacity: 0.85 }));
-                const x = Math.random() * 14000 - 7000;
-                const z = Math.random() * 14000 - 7000;
+            for (let i = 0; i < 40; i++) {
+                const crystalGeometry = new THREE.TetrahedronGeometry(3 + Math.random() * 2, 1);
+                const crystalMaterial = new THREE.MeshPhongMaterial({ color: 0x00ffcc, emissive: 0x00cc99, shininess: 80, transparent: true, opacity: 0.85 });
+                const crystal = new THREE.Mesh(crystalGeometry, crystalMaterial);
+                const x = Math.random() * 7000 - 3500;
+                const z = Math.random() * 7000 - 3500;
                 crystal.position.set(x, fractalNoise(x, z) + 3, z);
                 crystal.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
                 crystal.castShadow = true;
@@ -977,26 +911,22 @@
             time += 0.012;
             cycleTime += 0.015;
 
-            const cycleDuration = 120; // 2-minute day/night cycle
+            const cycleDuration = 60;
             const dayNight = Math.sin(cycleTime * Math.PI / cycleDuration) * 0.5 + 0.5;
             skyMaterial.uniforms.time.value = time;
             skyMaterial.uniforms.dayNight.value = dayNight;
             skyMaterial.uniforms.pulseIntensity.value = 0.5 * (1 - dayNight);
-            skyMaterial.uniforms.starAlpha.value = 1 - dayNight; // Stars fade in at night
             fogMaterial.uniforms.time.value = time;
 
-            // Sun orbit
-            cosmicLights[0].position.set(Math.cos(cycleTime) * 7000, 5000 * Math.sin(cycleTime), Math.sin(cycleTime) * 7000);
-            cosmicLights[0].children[0].intensity = dayNight * 2;
-
-            // Stars
-            cosmicLights[1].material.opacity = 1 - dayNight;
+            cosmicLights[0].position.set(Math.cos(time) * 1000, 600 + Math.sin(time * 0.8) * 120, Math.sin(time) * 1000);
+            cosmicLights[1].position.set(Math.cos(time + 2) * 900, 650 + Math.sin(time * 0.9) * 100, Math.sin(time + 2) * 900);
+            cosmicLights[2].position.set(Math.cos(time + 4) * 800, 700 + Math.sin(time) * 80, Math.sin(time + 4) * 800);
 
             scene.children.forEach(child => {
                 if (child.userData.speed && !child.userData.orbitRadius && !child.userData.baseY) {
                     child.position.x += child.userData.speed;
                     child.position.y = 150 + Math.sin(time + child.userData.hover) * 12;
-                    if (child.position.x > 7000) child.position.x = -7000;
+                    if (child.position.x > 3500) child.position.x = -3500;
                     child.scale.setScalar(1 + Math.sin(time * 2 + child.userData.hover) * 0.15);
                 }
             });
@@ -1008,8 +938,10 @@
                 ship.position.z = Math.sin(ship.userData.orbitAngle) * ship.userData.orbitRadius;
                 ship.position.y = 50 + Math.sin(ship.userData.heightAngle) * 120;
                 ship.rotation.y += 0.02;
-                if (ship.position.x > 8000) ship.position.x = -8000;
-                if (ship.position.z > 8000) ship.position.z = -8000;
+                if (ship.position.x > 4000) ship.position.x = -4000;
+                if (ship.position.x < -4000) ship.position.x = 4000;
+                if (ship.position.z > 4000) ship.position.z = -4000;
+                if (ship.position.z < -4000) ship.position.z = 4000;
             });
 
             waterfalls.forEach(waterfall => {
@@ -1029,15 +961,12 @@
             for (let i = 0; i < fogPositions.length; i += 3) {
                 fogPositions[i] += Math.sin(time + fogPositions[i + 1]) * 0.015;
                 fogPositions[i + 2] += Math.cos(time + fogPositions[i]) * 0.015;
-                if (fogPositions[i] > 8000) fogPositions[i] = -8000;
-                if (fogPositions[i + 2] > 8000) fogPositions[i + 2] = -8000;
+                if (fogPositions[i] > 4000) fogPositions[i] = -4000;
+                if (fogPositions[i] < -4000) fogPositions[i] = 4000;
+                if (fogPositions[i + 2] > 4000) fogPositions[i + 2] = -4000;
+                if (fogPositions[i + 2] < -4000) fogPositions[i + 2] = 4000;
             }
             fogParticles.geometry.attributes.position.needsUpdate = true;
-
-            energyRocks.forEach(rock => {
-                rock.rotation.y += 0.01;
-                rock.position.y = fractalNoise(rock.position.x, rock.position.z) + 10 + Math.sin(time) * 2;
-            });
         }
 
         function updateMovement() {
@@ -1054,12 +983,38 @@
             if (keys.space) velocity.y += verticalSpeed;
             if (keys.shift) velocity.y -= verticalSpeed;
             if (!keys.space && !keys.shift && Math.abs(velocity.x) < 0.1 && Math.abs(velocity.z) < 0.1) {
-                velocity.y = Math.sin(time * 2) * 0.2; // Stable hover
+                velocity.y = Math.sin(time * 2) * 0.05;
             }
 
             velocity.clampLength(0, maxSpeed);
             velocity.multiplyScalar(friction);
             ship.position.add(velocity);
+
+            const forwardVel = velocity.dot(forward);
+            const rightVel = velocity.dot(right);
+            const maxTilt = THREE.MathUtils.degToRad(20);
+            ship.rotation.x = THREE.MathUtils.lerp(ship.rotation.x, THREE.MathUtils.clamp(forwardVel * 0.05, -maxTilt, maxTilt), 0.2);
+            ship.rotation.z = THREE.MathUtils.lerp(ship.rotation.z, THREE.MathUtils.clamp(-rightVel * 0.05, -maxTilt, maxTilt), 0.2);
+            ship.rotation.y = theta;
+
+            const offset = new THREE.Vector3(0, cameraHeight, cameraDistance).applyQuaternion(camera.quaternion);
+            camera.position.lerp(ship.position.clone().add(offset), 0.2);
+        }
+
+        function updateCamera() {
+            lon = THREE.MathUtils.lerp(lon, targetLon, 0.2);
+            lat = THREE.MathUtils.lerp(lat, targetLat, 0.2);
+            lat = Math.max(-85, Math.min(85, lat));
+
+            phi = THREE.MathUtils.degToRad(90 - lat);
+            theta = THREE.MathUtils.degToRad(lon);
+
+            const lookAt = new THREE.Vector3(
+                camera.position.x + Math.sin(phi) * Math.cos(theta),
+                camera.position.y + Math.cos(phi),
+                camera.position.z + Math.sin(phi) * Math.sin(theta)
+            );
+            camera.lookAt(lookAt);
 
             const ground = scene.children.find(child => child.isMesh && child.geometry.type === 'PlaneGeometry');
             if (ground) {
@@ -1072,33 +1027,10 @@
                         velocity.y = Math.max(0, velocity.y);
                     }
                 }
-            }
 
-            const forwardVel = velocity.dot(forward);
-            const rightVel = velocity.dot(right);
-            const maxTilt = THREE.MathUtils.degToRad(20);
-            ship.rotation.x = THREE.MathUtils.lerp(ship.rotation.x, THREE.MathUtils.clamp(forwardVel * 0.05, -maxTilt, maxTilt), 0.2);
-            ship.rotation.z = THREE.MathUtils.lerp(ship.rotation.z, THREE.MathUtils.clamp(-rightVel * 0.05, -maxTilt, maxTilt), 0.2);
-            ship.rotation.y = theta;
-        }
-
-        function updateCamera() {
-            lon = THREE.MathUtils.lerp(lon, targetLon, 0.2);
-            lat = THREE.MathUtils.lerp(lat, targetLat, 0.2);
-            lat = Math.max(-85, Math.min(85, lat));
-
-            phi = THREE.MathUtils.degToRad(90 - lat);
-            theta = THREE.MathUtils.degToRad(lon);
-
-            const offset = new THREE.Vector3(0, cameraHeight, cameraDistance).applyQuaternion(camera.quaternion);
-            camera.position.lerp(ship.position.clone().add(offset), 0.2);
-            camera.lookAt(ship.position);
-
-            const ground = scene.children.find(child => child.isMesh && child.geometry.type === 'PlaneGeometry');
-            if (ground) {
                 const colors = ground.geometry.attributes.color || new THREE.Float32BufferAttribute(new Float32Array(ground.geometry.attributes.position.count * 3), 3);
-                const shipX = Math.floor((ship.position.x + 8000) / 16000 * 512);
-                const shipZ = Math.floor((ship.position.z + 8000) / 16000 * 512);
+                const shipX = Math.floor((ship.position.x + 4000) / 8000 * 512);
+                const shipZ = Math.floor((ship.position.z + 4000) / 8000 * 512);
                 for (let i = 0; i < colors.count; i++) {
                     const dx = Math.abs(i % 512 - shipX);
                     const dz = Math.abs(Math.floor(i / 512) - shipZ);
