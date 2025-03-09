@@ -7,36 +7,31 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body, html { overflow: hidden; width: 100%; height: 100%; font-family: 'Comic Sans MS', 'Arial', sans-serif; background: #0a0a1e; color: #fff; touch-action: none; }
-        
         #intro, #option-mode { 
             position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; 
             background: radial-gradient(circle at center, #1e1e3c 0%, #0a0a1e 70%); z-index: 200; animation: pulseBackground 10s infinite alternate; 
         }
         #option-mode { display: none; }
         @keyframes pulseBackground { 0% { background: radial-gradient(circle at center, #1e1e3c 0%, #0a0a1e 70%); } 100% { background: radial-gradient(circle at center, #2a2a5a 0%, #0a0a1e 70%); } }
-        
         #intro h1, #option-mode h1 { font-size: 5rem; text-transform: uppercase; color: #00d4ff; text-shadow: 0 0 10px #00d4ff, 0 0 20px #ff00ff, 0 0 30px #00d4ff; animation: glowText 2s infinite alternate; border: 4px solid #fff; padding: 20px; background: rgba(0, 0, 0, 0.7); transform: skew(-5deg); }
         @keyframes glowText { 0% { text-shadow: 0 0 10px #00d4ff, 0 0 20px #ff00ff; } 100% { text-shadow: 0 0 20px #00d4ff, 0 0 40px #ff00ff; } }
-        
         #intro p, #option-mode p { font-size: 1.5rem; max-width: 600px; text-align: center; margin: 20px 0; color: #aaaaff; text-shadow: 0 0 5px #aaaaff; }
         #start-button, .option-button, #enter-button, #generate-code, #join-game { margin: 10px; padding: 15px 30px; font-size: 1.8rem; color: #fff; background: linear-gradient(45deg, #ff00ff, #00d4ff); border: 5px solid #fff; border-radius: 15px; text-transform: uppercase; cursor: pointer; box-shadow: 0 0 15px #ff00ff, 0 0 25px #00d4ff; animation: pulseButton 1.5s infinite; transform: skew(-10deg); }
         #start-button:hover, .option-button:hover, #enter-button:hover, #generate-code:hover, #join-game:hover { background: linear-gradient(45deg, #00d4ff, #ff00ff); box-shadow: 0 0 25px #ff00ff, 0 0 35px #00d4ff; }
         @keyframes pulseButton { 0% { transform: skew(-10deg) scale(1); box-shadow: 0 0 15px #ff00ff; } 50% { transform: skew(-10deg) scale(1.05); box-shadow: 0 0 25px #00d4ff; } 100% { transform: skew(-10deg) scale(1); box-shadow: 0 0 15px #ff00ff; } }
-        
         #ship-selection, #color-selection, #multiplayer-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin: 20px 0; }
         .ship-option, .color-option { width: 100px; height: 100px; border: 3px solid #fff; border-radius: 10px; cursor: pointer; transition: transform 0.3s; }
         .ship-option:hover, .color-option:hover { transform: scale(1.1); }
         .ship-option.selected, .color-option.selected { border-color: #00d4ff; box-shadow: 0 0 15px #00d4ff; }
         #join-game-input { padding: 10px; font-size: 1.5rem; border: 3px solid #fff; border-radius: 10px; background: rgba(0, 0, 0, 0.7); color: #fff; }
         #generated-code { font-size: 1.5rem; color: #00d4ff; text-shadow: 0 0 5px #00d4ff; margin: 10px; }
-        
         #footer { position: absolute; bottom: 20px; width: 100%; text-align: center; font-size: 1.2rem; color: #aaaaff; text-shadow: 0 0 5px #aaaaff; letter-spacing: 2px; }
         #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; display: none; }
         #joystick-container { position: absolute; bottom: 30px; right: 30px; width: 100px; height: 100px; background: radial-gradient(circle, rgba(255, 255, 255, 0.3), rgba(0, 0, 50, 0.5)); border-radius: 50%; z-index: 10; touch-action: none; }
         #joystick { position: relative; top: 25px; left: 25px; width: 50px; height: 50px; background: radial-gradient(circle, #00d4ff, #1e90ff); border-radius: 50%; box-shadow: 0 0 10px #00d4ff; cursor: pointer; touch-action: none; }
         #instructions { position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 50, 0.7); padding: 10px 15px; border-radius: 5px; color: #fff; z-index: 10; max-width: 350px; text-shadow: 0 0 3px #00d4ff; }
         #pause-menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 50, 0.9); padding: 20px; border-radius: 10px; z-index: 100; display: none; text-align: center; }
-        
+        #race-status { position: absolute; top: 20px; right: 20px; color: #00d4ff; font-size: 1.5rem; z-index: 10; }
         @media (max-width: 768px) { #intro h1, #option-mode h1 { font-size: 3rem; } #intro p, #option-mode p { font-size: 1rem; } #start-button, .option-button, #enter-button, #generate-code, #join-game { font-size: 1.5rem; padding: 10px 20px; } #footer { font-size: 1rem; } #joystick-container { bottom: 20px; right: 20px; } #instructions { font-size: 14px; max-width: 250px; } }
     </style>
 </head>
@@ -68,7 +63,7 @@
     </div>
 
     <div id="instructions">
-        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down
+        W/S: Thrust forward/back (Double-tap W for warp) | A/D: Strafe | P: Pause | Esc: Quit | G: Shoot | Joystick/Mouse: Look | Arrow keys: Rotate | +/-: Zoom | Space: Up (3s+ to blast) | Shift: Down | R: Toggle Race
     </div>
     <canvas id="canvas"></canvas>
     <div id="joystick-container">
@@ -79,8 +74,10 @@
         <div class="option-button" id="resume-button">Resume</div>
         <div class="option-button" id="quit-button">Quit</div>
     </div>
+    <div id="race-status"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script>
         const intro = document.getElementById('intro');
         const optionMode = document.getElementById('option-mode');
@@ -98,8 +95,10 @@
         const pauseMenu = document.getElementById('pause-menu');
         const resumeButton = document.getElementById('resume-button');
         const quitButton = document.getElementById('quit-button');
+        const raceStatus = document.getElementById('race-status');
 
         let selectedShip = null, selectedColor = null, gameMode = null, gameCode = null, isPaused = false, isHost = false;
+        let peer = null, connections = [], myId = null, peerShips = {}, isRaceMode = false, raceStartTime = 0, raceFinishLine;
 
         const ships = [
             { name: 'Classic', perk: 'Balanced', color: 0xaaaaaa, gun: 'Standard', speed: 8.0 },
@@ -161,7 +160,6 @@
             if (gameMode === 'multiplayer') {
                 gameCode = Math.random().toString(36).substr(2, 6).toUpperCase();
                 generatedCodeDisplay.innerText = `Code: ${gameCode}`;
-                joinGameInput.value = gameCode;
                 isHost = true;
             }
         });
@@ -169,7 +167,7 @@
         joinGameButton.addEventListener('click', () => {
             if (gameMode === 'multiplayer' && joinGameInput.value) {
                 gameCode = joinGameInput.value.toUpperCase();
-                generatedCodeDisplay.innerText = `Joined: ${gameCode}`;
+                generatedCodeDisplay.innerText = `Joining: ${gameCode}`;
                 isHost = false;
             }
         });
@@ -183,8 +181,8 @@
                 optionMode.style.display = 'none';
                 canvas.style.display = 'block';
                 init();
-            } else {
-                alert('For multiplayer, generate or join with a code!');
+            } else if (gameMode === 'multiplayer') {
+                alert('Please generate a code or join a game first!');
             }
         });
 
@@ -200,21 +198,17 @@
         let camera, scene, renderer, ship, skyMaterial, fogMaterial, cosmicLights = [], npcShips = [], waterfalls = [], fogParticles, obstacles = [], bullets = [];
         let velocity = new THREE.Vector3();
         let maxSpeed = ships[0].speed, baseAccel = 2.0, boostAccel = 6.0, friction = 0.95, liftSpeed = 4.0, blastSpeed = 40, verticalSpeed = 4.0;
-        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, escape: false };
+        let keys = { w: false, s: false, a: false, d: false, space: false, shift: false, p: false, g: false, escape: false, r: false };
         let isUserInteracting = false, onPointerDownMouseX = 0, onPointerDownMouseY = 0, lon = 0, onPointerDownLon = 0, lat = 0, onPointerDownLat = 0, targetLon = 0, targetLat = 0, phi = 0, theta = 0;
         let joystick, joystickRect, joystickCenterX, joystickCenterY, joystickActive = false, joystickTouchId = null;
         let time = 0, spaceHoldTime = 0, cycleTime = 0, cameraDistance = 15, cameraHeight = 5, lastWTime = 0, wTapCount = 0, boostEndTime = 0;
-        let peers = {}, myId, peerShips = {}, connectedPeers = 0;
-
-        // Mock multiplayer store
-        const gameSessions = {};
 
         function init() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
             camera.position.set(0, 10, 15);
 
-            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true });
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
@@ -228,6 +222,7 @@
             createSkyscraper();
             createNPCShips();
             createObstacles();
+            if (isHost && gameMode === 'multiplayer') createRaceFinishLine();
             setupJoystick();
             setupControls();
 
@@ -237,72 +232,136 @@
             document.addEventListener('pointerup', onPointerUp);
 
             if (gameMode === 'multiplayer') setupMultiplayer();
-            animate(); // Fly now, no excuses
+            animate();
         }
 
         function setupMultiplayer() {
-            myId = Math.random().toString(36).substr(2, 9);
-            peers[myId] = { id: myId, isHost };
+            console.log('Setting up multiplayer...');
+            peer = new Peer(isHost ? gameCode : null, {
+                debug: 2 // Enable PeerJS debug logs
+            });
 
-            if (isHost) {
-                gameSessions[gameCode] = {
-                    hostId: myId,
-                    players: { [myId]: { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor } }
+            peer.on('open', (id) => {
+                myId = id;
+                console.log(`Peer opened with ID: ${id}, isHost: ${isHost}, Code: ${gameCode}`);
+                if (!isHost) {
+                    console.log(`Attempting to connect to host with code: ${gameCode}`);
+                    const conn = peer.connect(gameCode, { reliable: true });
+                    setupConnection(conn);
+                }
+            });
+
+            peer.on('connection', (conn) => {
+                console.log(`Incoming connection from ${conn.peer}`);
+                if (isHost) {
+                    setupConnection(conn);
+                }
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS Error:', err.type, err);
+                if (err.type === 'peer-unavailable') {
+                    alert('Host not found! Check the code and try again.');
+                    cleanupMultiplayer();
+                    optionMode.style.display = 'flex';
+                    canvas.style.display = 'none';
+                }
+            });
+
+            // Start syncing after a short delay to ensure ship exists
+            setTimeout(() => {
+                console.log('Starting position sync...');
+                setInterval(syncShipData, 33); // ~30 FPS
+            }, 1000);
+        }
+
+        function setupConnection(conn) {
+            connections.push(conn);
+            conn.on('open', () => {
+                console.log(`Connection established with ${conn.peer}`);
+                const initialData = {
+                    type: 'init',
+                    id: myId,
+                    color: selectedColor,
+                    pos: ship ? ship.position.toArray() : [0, 100, 0],
+                    rot: ship ? ship.rotation.toArray() : [0, 0, 0]
                 };
-            } else {
-                if (gameSessions[gameCode]) {
-                    gameSessions[gameCode].players[myId] = { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor };
-                    connectedPeers = Object.keys(gameSessions[gameCode].players).length - 1;
-                    syncPeerShips();
-                } else {
-                    console.log('No session found for code:', gameCode);
-                    return;
+                conn.send(initialData);
+                console.log(`Sent initial data to ${conn.peer}:`, initialData);
+            });
+
+            conn.on('data', (data) => {
+                console.log(`Received data from ${conn.peer}:`, data);
+                if (data.id && data.pos && data.rot) {
+                    updatePeerShip(data);
                 }
-            }
+            });
 
-            // No blocking WebRTC—just simulate peers locally
-            requestAnimationFrame(updateMultiplayer);
-        }
-
-        function updateMultiplayer() {
-            if (gameMode !== 'multiplayer' || !gameSessions[gameCode]) return;
-
-            const session = gameSessions[gameCode];
-            session.players[myId] = { pos: ship.position.clone(), rot: ship.rotation.clone(), color: selectedColor };
-
-            if (!isHost) {
-                syncPeerShips();
-            }
-
-            requestAnimationFrame(updateMultiplayer);
-        }
-
-        function syncPeerShips() {
-            const session = gameSessions[gameCode];
-            if (!session) return;
-
-            Object.entries(session.players).forEach(([id, data]) => {
-                if (id === myId) return;
-                if (!peerShips[id]) {
-                    peerShips[id] = createPeerShip(data.color, gameCode);
+            conn.on('close', () => {
+                console.log(`Connection closed with ${conn.peer}`);
+                connections = connections.filter(c => c !== conn);
+                if (peerShips[conn.peer]) {
+                    scene.remove(peerShips[conn.peer]);
+                    delete peerShips[conn.peer];
+                    console.log(`Removed ship for ${conn.peer}`);
                 }
-                peerShips[id].position.copy(data.pos);
-                peerShips[id].rotation.copy(data.rot);
+            });
+
+            conn.on('error', (err) => {
+                console.error(`Connection error with ${conn.peer}:`, err);
             });
         }
 
-        function cleanupMultiplayer() {
-            if (gameMode === 'multiplayer' && gameCode) {
-                if (isHost) delete gameSessions[gameCode];
-                else if (gameSessions[gameCode]) delete gameSessions[gameCode].players[myId];
+        function syncShipData() {
+            if (!ship || !myId || connections.length === 0 || isPaused) {
+                console.log('Sync skipped:', { hasShip: !!ship, hasId: !!myId, connections: connections.length, isPaused });
+                return;
             }
-            peers = {};
-            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
-            peerShips = {};
-            connectedPeers = 0;
+
+            const data = {
+                type: 'update',
+                id: myId,
+                pos: ship.position.toArray(),
+                rot: ship.rotation.toArray(),
+                color: selectedColor,
+                raceMode: isRaceMode,
+                raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined
+            };
+
+            connections.forEach(conn => {
+                if (conn.open) {
+                    conn.send(data);
+                    console.log(`Sent update to ${conn.peer}:`, data.pos);
+                } else {
+                    console.log(`Connection to ${conn.peer} not open`);
+                }
+            });
         }
 
-        function createPeerShip(color, code) {
+        function updatePeerShip(data) {
+            const peerId = data.id;
+            if (!peerId || peerId === myId) return; // Ignore own data
+
+            if (!peerShips[peerId]) {
+                console.log(`Creating new ship for ${peerId}`);
+                peerShips[peerId] = createPeerShip(data.color);
+                scene.add(peerShips[peerId]); // Ensure it's added to the scene
+            }
+
+            const peerShip = peerShips[peerId];
+            const targetPos = new THREE.Vector3().fromArray(data.pos);
+            peerShip.position.lerp(targetPos, 0.5); // Smooth movement
+            peerShip.rotation.fromArray(data.rot);
+            console.log(`Updated ${peerId} to pos:`, peerShip.position.toArray());
+
+            if (data.raceMode && !isRaceMode && !isHost) {
+                isRaceMode = true;
+                if (!raceFinishLine) createRaceFinishLine();
+                raceStartTime = performance.now() - (data.raceTime * 1000);
+            }
+        }
+
+        function createPeerShip(color) {
             const shipGroup = new THREE.Group();
             const baseGeometry = new THREE.CylinderGeometry(3, 2.5, 0.8, 16, 1);
             const baseMaterial = new THREE.MeshPhongMaterial({ color, shininess: 50 });
@@ -319,33 +378,34 @@
             ring.rotation.x = Math.PI / 2;
             ring.position.y = -0.1;
             shipGroup.add(ring);
-
-            if (code) {
-                const plateGeometry = new THREE.PlaneGeometry(2, 0.5);
-                const plateMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-                const plate = new THREE.Mesh(plateGeometry, plateMaterial);
-                plate.position.set(0, 0, 2.5);
-                plate.rotation.y = Math.PI;
-
-                const canvas = document.createElement('canvas');
-                canvas.width = 256;
-                canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#000000';
-                ctx.fillRect(0, 0, 256, 64);
-                ctx.fillStyle = '#00d4ff';
-                ctx.font = 'bold 40px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(code, 128, 45);
-                const texture = new THREE.CanvasTexture(canvas);
-                plate.material.map = texture;
-                plate.material.needsUpdate = true;
-                shipGroup.add(plate);
-            }
-
-            shipGroup.position.set(connectedPeers * 10, 100, connectedPeers * 10);
-            scene.add(shipGroup);
+            console.log(`Created peer ship with color ${color.toString(16)}`);
             return shipGroup;
+        }
+
+        function cleanupMultiplayer() {
+            if (peer) {
+                connections.forEach(conn => conn.close());
+                peer.destroy();
+                peer = null;
+                connections = [];
+                myId = null;
+            }
+            Object.values(peerShips).forEach(peerShip => scene.remove(peerShip));
+            peerShips = {};
+            if (raceFinishLine) scene.remove(raceFinishLine);
+            raceFinishLine = null;
+            isRaceMode = false;
+            raceStatus.innerText = '';
+            console.log('Multiplayer cleaned up');
+        }
+
+        function createRaceFinishLine() {
+            const geometry = new THREE.RingGeometry(20, 25, 32);
+            const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
+            raceFinishLine = new THREE.Mesh(geometry, material);
+            raceFinishLine.position.set(500, 50, 500);
+            raceFinishLine.rotation.x = Math.PI / 2;
+            scene.add(raceFinishLine);
         }
 
         function animate() {
@@ -355,7 +415,21 @@
             updateMovement();
             updateCamera();
             updateBullets();
+            if (isRaceMode) updateRace();
             renderer.render(scene, camera);
+        }
+
+        function updateRace() {
+            if (raceFinishLine && ship.position.distanceTo(raceFinishLine.position) < 25) {
+                const timeTaken = (performance.now() - raceStartTime) / 1000;
+                raceStatus.innerText = `Race Finished! Time: ${timeTaken.toFixed(2)}s`;
+                isRaceMode = false;
+                scene.remove(raceFinishLine);
+                raceFinishLine = null;
+            } else if (isRaceMode) {
+                const timeElapsed = (performance.now() - raceStartTime) / 1000;
+                raceStatus.innerText = `Race Time: ${timeElapsed.toFixed(2)}s`;
+            }
         }
 
         function createCosmicSky() {
@@ -508,6 +582,7 @@
                     case 'shift': keys.shift = true; break;
                     case 'p': if (!keys.p) togglePause(!isPaused); keys.p = true; break;
                     case 'g': keys.g = true; shoot(); break;
+                    case 'r': if (!keys.r) { isRaceMode = !isRaceMode; if (isRaceMode && !raceFinishLine) { createRaceFinishLine(); raceStartTime = performance.now(); } } keys.r = true; break;
                     case 'escape': if (!isPaused) togglePause(true); else if (confirm('Quit to menu?')) quitButton.click(); break;
                     case '+': case '=': cameraDistance = Math.max(5, cameraDistance - 1); break;
                     case '-': cameraDistance = Math.min(30, cameraDistance + 1); break;
@@ -523,6 +598,7 @@
                     case 'shift': keys.shift = false; break;
                     case 'p': keys.p = false; break;
                     case 'g': keys.g = false; break;
+                    case 'r': keys.r = false; break;
                 }
             });
             document.addEventListener('keydown', onKeyDown);
@@ -552,7 +628,6 @@
                 if (gameMode === 'multiplayer') {
                     Object.values(peerShips).forEach(peerShip => {
                         if (bullet.position.distanceTo(peerShip.position) < 5) {
-                            // Simulate hit locally
                             scene.remove(bullet);
                             bullets.splice(index, 1);
                         }
