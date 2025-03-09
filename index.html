@@ -247,16 +247,16 @@
 
             peer.on('open', (id) => {
                 myId = id;
-                console.log(isHost ? `Hosting with ID: ${gameCode}` : `Connected with ID: ${id}`);
+                console.log(`${isHost ? 'Hosting' : 'Joined'} with ID: ${id}, Code: ${gameCode}`);
                 if (!isHost) {
                     const conn = peer.connect(gameCode, { reliable: true });
-                    handleConnection(conn);
+                    setupConnection(conn, true);
                 }
             });
 
             peer.on('connection', (conn) => {
                 if (isHost) {
-                    handleConnection(conn);
+                    setupConnection(conn, false);
                 }
             });
 
@@ -271,26 +271,38 @@
             });
         }
 
-        function handleConnection(conn) {
+        function setupConnection(conn, isJoiner) {
             connections.push(conn);
             conn.on('open', () => {
-                console.log(`${isHost ? 'New player' : 'Connected to host'} - Peer: ${conn.peer}`);
-                if (isHost) {
-                    conn.send({ type: 'welcome', id: myId, color: selectedColor, pos: ship ? ship.position.toArray() : [0, 100, 0], rot: ship ? ship.rotation.toArray() : [0, 0, 0] });
-                } else {
-                    conn.send({ type: 'join', id: myId, color: selectedColor, pos: ship ? ship.position.toArray() : [0, 100, 0], rot: ship ? ship.rotation.toArray() : [0, 0, 0] });
-                }
+                console.log(`Connection opened with ${conn.peer} (${isJoiner ? 'Joiner to Host' : 'Host to Joiner'})`);
+                const initialData = { 
+                    type: isJoiner ? 'join' : 'welcome', 
+                    id: myId, 
+                    color: selectedColor, 
+                    pos: ship ? ship.position.toArray() : [0, 100, 0], 
+                    rot: ship ? ship.rotation.toArray() : [0, 0, 0] 
+                };
+                conn.send(initialData);
+                console.log(`Sent ${initialData.type} to ${conn.peer}:`, initialData);
             });
-            conn.on('data', (data) => handlePeerData(data, conn.peer));
+
+            conn.on('data', (data) => {
+                console.log(`Data from ${conn.peer}:`, data);
+                handlePeerData(data, conn.peer);
+            });
+
             conn.on('close', () => {
+                console.log(`Connection closed with ${conn.peer}`);
                 connections = connections.filter(c => c !== conn);
                 cleanupPeerShip(conn.peer);
             });
+
             conn.on('error', (err) => console.error(`Connection error with ${conn.peer}: ${err}`));
         }
 
         function setupMultiplayer() {
             if (!peer) return;
+            console.log('Multiplayer sync started');
             setInterval(syncShipData, 33); // ~30 FPS sync
         }
 
@@ -306,24 +318,33 @@
                 raceTime: isRaceMode && isHost ? (performance.now() - raceStartTime) / 1000 : undefined 
             };
             connections.forEach(conn => {
-                if (conn.open) conn.send(data);
-                else connections = connections.filter(c => c !== conn);
+                if (conn.open) {
+                    conn.send(data);
+                    // console.log(`Sent update to ${conn.peer}:`, data); // Uncomment for verbose sync logging
+                } else {
+                    console.log(`Connection to ${conn.peer} closed, cleaning up`);
+                    connections = connections.filter(c => c !== conn);
+                }
             });
         }
 
         function handlePeerData(data, peerId) {
-            console.log(`Received data from ${peerId}:`, data); // Debug log
+            if (!data || !peerId) {
+                console.error('Invalid data or peerId:', data, peerId);
+                return;
+            }
+
             if (data.type === 'join' || data.type === 'welcome') {
                 if (!peerShips[peerId]) {
                     peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Created ship for ${peerId}`);
+                    console.log(`Spawned ship for ${peerId} at`, data.pos);
                 }
                 peerShips[peerId].position.fromArray(data.pos);
                 peerShips[peerId].rotation.fromArray(data.rot);
             } else if (data.type === 'update') {
                 if (!peerShips[peerId]) {
                     peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Late join - Created ship for ${peerId}`);
+                    console.log(`Late spawn for ${peerId} at`, data.pos);
                 }
                 peerShips[peerId].position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
                 peerShips[peerId].rotation.fromArray(data.rot);
@@ -332,6 +353,8 @@
                     if (!raceFinishLine) createRaceFinishLine();
                     raceStartTime = performance.now() - (data.raceTime * 1000);
                 }
+            } else {
+                console.warn(`Unknown data type from ${peerId}:`, data);
             }
         }
 
@@ -339,7 +362,7 @@
             if (peerShips[peerId]) {
                 scene.remove(peerShips[peerId]);
                 delete peerShips[peerId];
-                console.log(`Removed peer ship: ${peerId}`);
+                console.log(`Cleaned up ship for ${peerId}`);
             }
         }
 
@@ -357,6 +380,7 @@
             raceFinishLine = null;
             isRaceMode = false;
             raceStatus.innerText = '';
+            console.log('Multiplayer cleaned up');
         }
 
         function createPeerShip(color) {
