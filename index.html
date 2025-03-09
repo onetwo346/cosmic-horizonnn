@@ -267,6 +267,8 @@
                     cleanupMultiplayer();
                     optionMode.style.display = 'flex';
                     canvas.style.display = 'none';
+                } else if (err.type === 'network') {
+                    console.error('Network issue with PeerJS. Trying to reconnect...');
                 }
             });
         }
@@ -287,7 +289,7 @@
             });
 
             conn.on('data', (data) => {
-                console.log(`Data from ${conn.peer}:`, data);
+                console.log(`Received data from ${conn.peer}:`, data);
                 handlePeerData(data, conn.peer);
             });
 
@@ -297,7 +299,9 @@
                 cleanupPeerShip(conn.peer);
             });
 
-            conn.on('error', (err) => console.error(`Connection error with ${conn.peer}: ${err}`));
+            conn.on('error', (err) => {
+                console.error(`Connection error with ${conn.peer}:`, err);
+            });
         }
 
         function setupMultiplayer() {
@@ -307,7 +311,10 @@
         }
 
         function syncShipData() {
-            if (!ship || isPaused || !myId) return;
+            if (!ship || isPaused || !myId || connections.length === 0) {
+                console.log('Sync skipped:', { hasShip: !!ship, isPaused, hasId: !!myId, connectionCount: connections.length });
+                return;
+            }
             const data = { 
                 type: 'update', 
                 id: myId, 
@@ -320,9 +327,9 @@
             connections.forEach(conn => {
                 if (conn.open) {
                     conn.send(data);
-                    // console.log(`Sent update to ${conn.peer}:`, data); // Uncomment for verbose sync logging
+                    console.log(`Sent update to ${conn.peer}:`, data.pos); // Log position for debugging
                 } else {
-                    console.log(`Connection to ${conn.peer} closed, cleaning up`);
+                    console.log(`Connection to ${conn.peer} not open, removing`);
                     connections = connections.filter(c => c !== conn);
                 }
             });
@@ -334,10 +341,12 @@
                 return;
             }
 
+            console.log(`Processing data from ${peerId}:`, data);
+
             if (data.type === 'join' || data.type === 'welcome') {
                 if (!peerShips[peerId]) {
                     peerShips[peerId] = createPeerShip(data.color);
-                    console.log(`Spawned ship for ${peerId} at`, data.pos);
+                    console.log(`Spawned new ship for ${peerId} at`, data.pos);
                 }
                 peerShips[peerId].position.fromArray(data.pos);
                 peerShips[peerId].rotation.fromArray(data.rot);
@@ -346,8 +355,10 @@
                     peerShips[peerId] = createPeerShip(data.color);
                     console.log(`Late spawn for ${peerId} at`, data.pos);
                 }
-                peerShips[peerId].position.lerp(new THREE.Vector3().fromArray(data.pos), 0.5);
+                const targetPos = new THREE.Vector3().fromArray(data.pos);
+                peerShips[peerId].position.lerp(targetPos, 0.5); // Smooth interpolation
                 peerShips[peerId].rotation.fromArray(data.rot);
+                console.log(`Updated ${peerId} position to`, peerShips[peerId].position.toArray());
                 if (data.raceMode && !isRaceMode && !isHost) {
                     isRaceMode = true;
                     if (!raceFinishLine) createRaceFinishLine();
@@ -401,6 +412,7 @@
             ring.position.y = -0.1;
             shipGroup.add(ring);
             scene.add(shipGroup);
+            console.log(`Created peer ship with color ${color.toString(16)} at`, shipGroup.position.toArray());
             return shipGroup;
         }
 
